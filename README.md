@@ -342,6 +342,12 @@ except PromptGuardBlockedError as e:
     print(f"Event ID: {e.decision.event_id}")
 ```
 
+## Links
+
+- [Documentation](https://docs.promptguard.co)
+- [SDK Reference](https://docs.promptguard.co/sdks/python)
+- [Support](mailto:support@promptguard.co)
+
 ## License
 
 MIT
