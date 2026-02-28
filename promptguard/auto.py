@@ -22,6 +22,7 @@ Modes:
 
 import logging
 import os
+from typing import Any
 
 from promptguard.guard import GuardClient
 
@@ -146,6 +147,29 @@ def is_initialized() -> bool:
 _applied_patches: list = []
 
 
+def _try_apply_patch(patch_module: Any) -> None:
+    """Attempt to apply a single patch module, logging failures."""
+    try:
+        if patch_module.apply():
+            _applied_patches.append(patch_module)
+            logger.debug("Patched %s", patch_module.NAME)
+    except Exception:
+        logger.debug(
+            "Skipping %s (not installed or incompatible)",
+            patch_module.NAME,
+            exc_info=True,
+        )
+
+
+def _try_revert_patch(patch_module: Any) -> None:
+    """Attempt to revert a single patch module, logging failures."""
+    try:
+        patch_module.revert()
+        logger.debug("Reverted %s", patch_module.NAME)
+    except Exception:
+        logger.warning("Failed to revert %s", patch_module.NAME, exc_info=True)
+
+
 def _apply_patches() -> None:
     """Try to patch every supported SDK.  Missing packages are silently
     skipped — we only patch what is available."""
@@ -158,24 +182,11 @@ def _apply_patches() -> None:
     )
 
     for patch_module in [openai_patch, anthropic_patch, google_patch, cohere_patch, bedrock_patch]:
-        try:
-            if patch_module.apply():
-                _applied_patches.append(patch_module)
-                logger.debug("Patched %s", patch_module.NAME)
-        except Exception:
-            logger.debug(
-                "Skipping %s (not installed or incompatible)",
-                patch_module.NAME,
-                exc_info=True,
-            )
+        _try_apply_patch(patch_module)
 
 
 def _remove_patches() -> None:
     """Revert all applied patches."""
     for patch_module in _applied_patches:
-        try:
-            patch_module.revert()
-            logger.debug("Reverted %s", patch_module.NAME)
-        except Exception:
-            logger.warning("Failed to revert %s", patch_module.NAME, exc_info=True)
+        _try_revert_patch(patch_module)
     _applied_patches.clear()

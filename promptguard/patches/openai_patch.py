@@ -35,21 +35,22 @@ def _messages_to_guard_format(messages: Any) -> list[dict[str, str]]:
         if isinstance(msg, dict):
             content = msg.get("content", "")
             if isinstance(content, list):
-                text_parts = []
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
+                text_parts = [
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ]
                 content = "\n".join(text_parts)
             result.append({"role": msg.get("role", "user"), "content": str(content)})
         elif hasattr(msg, "role") and hasattr(msg, "content"):
             content = msg.content or ""
             if isinstance(content, list):
-                text_parts = []
-                for part in content:
-                    if hasattr(part, "text"):
-                        text_parts.append(part.text)
-                    elif isinstance(part, dict) and part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
+                text_parts = [
+                    part.text if hasattr(part, "text") else part.get("text", "")
+                    for part in content
+                    if hasattr(part, "text")
+                    or (isinstance(part, dict) and part.get("type") == "text")
+                ]
                 content = "\n".join(text_parts)
             result.append({"role": str(msg.role), "content": str(content)})
     return result
@@ -96,7 +97,7 @@ def _extract_response_content(response: Any) -> str | None:
             if choices:
                 return choices[0].get("message", {}).get("content")
     except Exception:
-        pass
+        logger.debug("Failed to extract OpenAI response text", exc_info=True)
     return None
 
 

@@ -82,16 +82,27 @@ fix = true
 
 [tool.ruff.lint]
 select = [
-    "F",    # pyflakes
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "I",    # isort
-    "UP",   # pyupgrade
-    "B",    # bugbear
-    "C4",   # comprehensions
-    "RUF",  # ruff-specific
+    "F",      # pyflakes
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # bugbear
+    "C4",     # comprehensions
+    "SIM",    # simplify
+    "S",      # bandit (security)
+    "T20",    # no print statements
+    "PTH",    # pathlib
+    "PIE",    # misc lints
+    "RET",    # return consistency
+    "PERF",   # performance
+    "TCH",    # type-checking imports
+    "RUF",    # ruff-specific
 ]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -101,6 +112,10 @@ known-first-party = ["promptguard"]
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+filterwarnings = ["error"]
 
 [tool.mypy]
 python_version = "3.10"

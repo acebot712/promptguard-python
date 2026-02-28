@@ -69,8 +69,7 @@ class ChatCompletions:
         if stream:
             return self._stream_completion(payload)
 
-        response = self._client._request("POST", "/chat/completions", json=payload)
-        return response
+        return self._client._request("POST", "/chat/completions", json=payload)
 
     def _stream_completion(
         self,
@@ -510,10 +509,12 @@ class PromptGuard:
                     continue
                 raise
 
-            if response.status_code in _RETRYABLE_STATUS_CODES:
-                if attempt < self.config.max_retries:
-                    time.sleep(self.config.retry_delay * (2**attempt))
-                    continue
+            if (
+                response.status_code in _RETRYABLE_STATUS_CODES
+                and attempt < self.config.max_retries
+            ):
+                time.sleep(self.config.retry_delay * (2**attempt))
+                continue
 
             if response.status_code >= 400:
                 try:
@@ -909,10 +910,12 @@ class PromptGuardAsync:
                     continue
                 raise
 
-            if response.status_code in _RETRYABLE_STATUS_CODES:
-                if attempt < self.config.max_retries:
-                    await asyncio.sleep(self.config.retry_delay * (2**attempt))
-                    continue
+            if (
+                response.status_code in _RETRYABLE_STATUS_CODES
+                and attempt < self.config.max_retries
+            ):
+                await asyncio.sleep(self.config.retry_delay * (2**attempt))
+                continue
 
             if response.status_code >= 400:
                 try:

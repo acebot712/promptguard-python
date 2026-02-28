@@ -143,7 +143,6 @@ class PromptGuardCallbackHandler:
 
     def start_trace(self, trace_id: str | None = None) -> None:
         """Called at the start of a trace (no-op)."""
-        pass
 
     def end_trace(
         self,
@@ -151,7 +150,6 @@ class PromptGuardCallbackHandler:
         trace_map: dict[str, list[str]] | None = None,
     ) -> None:
         """Called at the end of a trace (clean up)."""
-        pass
 
     # -- LLM event scanning --------------------------------------------------
 
@@ -316,13 +314,12 @@ class PromptGuardCallbackHandler:
         if decision.blocked:
             if self._mode == "enforce":
                 raise PromptGuardBlockedError(decision)
-            else:
-                logger.warning(
-                    "[monitor] PromptGuard would block: %s (event=%s, llamaindex_event=%s)",
-                    decision.threat_type,
-                    decision.event_id,
-                    event_id,
-                )
+            logger.warning(
+                "[monitor] PromptGuard would block: %s (event=%s, llamaindex_event=%s)",
+                decision.threat_type,
+                decision.event_id,
+                event_id,
+            )
 
         if decision.redacted:
             logger.info("PromptGuard redacted content (event=%s)", decision.event_id)

@@ -17,7 +17,7 @@ CONTRACT_PATH = Path(__file__).resolve().parent / "guard-contract.json"
 @pytest.fixture(scope="module")
 def contract():
     assert CONTRACT_PATH.exists(), f"Contract file not found: {CONTRACT_PATH}"
-    with open(CONTRACT_PATH) as f:
+    with CONTRACT_PATH.open() as f:
         return json.load(f)
 
 

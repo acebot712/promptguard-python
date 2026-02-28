@@ -125,7 +125,7 @@ def _extract_response_content(response: Any) -> str | None:
                     parts.append(block.get("text", ""))
             return "\n".join(parts) if parts else None
     except Exception:
-        pass
+        logger.debug("Failed to extract Anthropic response text", exc_info=True)
     return None
 
 

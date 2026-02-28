@@ -118,21 +118,19 @@ class PromptGuardGuardrail:
         if decision.blocked:
             if self._mode == "enforce":
                 raise PromptGuardBlockedError(decision)
-            else:
-                logger.warning(
-                    "[monitor] PromptGuard would block crew input: %s (event=%s)",
-                    decision.threat_type,
-                    decision.event_id,
-                )
+            logger.warning(
+                "[monitor] PromptGuard would block crew input: %s (event=%s)",
+                decision.threat_type,
+                decision.event_id,
+            )
 
         if decision.redacted and decision.redacted_messages:
             if self._mode == "enforce":
                 return self._apply_redaction(inputs, decision.redacted_messages)
-            else:
-                logger.warning(
-                    "[monitor] PromptGuard would redact crew input: %s",
-                    decision.threat_type,
-                )
+            logger.warning(
+                "[monitor] PromptGuard would redact crew input: %s",
+                decision.threat_type,
+            )
 
         return inputs
 
@@ -166,12 +164,11 @@ class PromptGuardGuardrail:
         if decision.blocked:
             if self._mode == "enforce":
                 raise PromptGuardBlockedError(decision)
-            else:
-                logger.warning(
-                    "[monitor] PromptGuard would block crew output: %s (event=%s)",
-                    decision.threat_type,
-                    decision.event_id,
-                )
+            logger.warning(
+                "[monitor] PromptGuard would block crew output: %s (event=%s)",
+                decision.threat_type,
+                decision.event_id,
+            )
 
         return result
 
@@ -201,20 +198,19 @@ class PromptGuardGuardrail:
         if decision.blocked:
             if self._mode == "enforce":
                 raise PromptGuardBlockedError(decision)
-            else:
-                logger.warning(
-                    "[monitor] PromptGuard would block task output: %s", decision.threat_type
-                )
+            logger.warning(
+                "[monitor] PromptGuard would block task output: %s", decision.threat_type
+            )
 
         return output
 
     @staticmethod
     def _inputs_to_messages(inputs: dict[str, Any]) -> list[dict[str, str]]:
-        messages = []
-        for _key, value in inputs.items():
-            if isinstance(value, str) and value.strip():
-                messages.append({"role": "user", "content": value})
-        return messages
+        return [
+            {"role": "user", "content": value}
+            for value in inputs.values()
+            if isinstance(value, str) and value.strip()
+        ]
 
     @staticmethod
     def _apply_redaction(
@@ -224,10 +220,13 @@ class PromptGuardGuardrail:
         result = dict(inputs)
         idx = 0
         for key in result:
-            if isinstance(result[key], str) and result[key].strip():
-                if idx < len(redacted_messages):
-                    result[key] = redacted_messages[idx].get("content", result[key])
-                    idx += 1
+            if (
+                isinstance(result[key], str)
+                and result[key].strip()
+                and idx < len(redacted_messages)
+            ):
+                result[key] = redacted_messages[idx].get("content", result[key])
+                idx += 1
         return result
 
 
@@ -279,12 +278,11 @@ def secure_tool(
                 if decision.blocked:
                     if mode == "enforce":
                         raise PromptGuardBlockedError(decision)
-                    else:
-                        logger.warning(
-                            "[monitor] PromptGuard would block tool %s: %s",
-                            tool_name,
-                            decision.threat_type,
-                        )
+                    logger.warning(
+                        "[monitor] PromptGuard would block tool %s: %s",
+                        tool_name,
+                        decision.threat_type,
+                    )
             except PromptGuardBlockedError:
                 raise
             except Exception:

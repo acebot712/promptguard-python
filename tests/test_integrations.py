@@ -15,13 +15,12 @@ class TestLangChainCallbackHandler:
     def _make_handler(self, mode="enforce", scan_responses=True):
         from promptguard.integrations.langchain import PromptGuardCallbackHandler
 
-        handler = PromptGuardCallbackHandler(
+        return PromptGuardCallbackHandler(
             api_key="pg_test",
             base_url="http://localhost:8080/api/v1",
             mode=mode,
             scan_responses=scan_responses,
         )
-        return handler
 
     def test_init_requires_api_key(self):
         from promptguard.integrations.langchain import PromptGuardCallbackHandler

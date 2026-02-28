@@ -87,7 +87,7 @@ def _extract_response_text(response: Any) -> str | None:
         if isinstance(response, dict):
             return response.get("text", response.get("message", {}).get("content"))
     except Exception:
-        pass
+        logger.debug("Failed to extract Cohere response text", exc_info=True)
     return None
 
 

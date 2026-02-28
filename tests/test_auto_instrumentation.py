@@ -2,6 +2,7 @@
 Tests for the auto-instrumentation system (init/shutdown and patching).
 """
 
+import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -22,10 +23,8 @@ class TestInit:
 
     def teardown_method(self):
         """Clean up after each test."""
-        try:
+        with contextlib.suppress(Exception):
             shutdown()
-        except Exception:
-            pass
 
     def test_init_requires_api_key(self):
         with pytest.raises(ValueError, match="API key required"):

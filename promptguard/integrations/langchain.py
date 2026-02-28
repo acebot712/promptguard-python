@@ -350,13 +350,12 @@ class PromptGuardCallbackHandler:
         if decision.blocked:
             if self._mode == "enforce":
                 raise PromptGuardBlockedError(decision)
-            else:
-                logger.warning(
-                    "[monitor] PromptGuard would block: %s (event=%s, run=%s)",
-                    decision.threat_type,
-                    decision.event_id,
-                    run_id,
-                )
+            logger.warning(
+                "[monitor] PromptGuard would block: %s (event=%s, run=%s)",
+                decision.threat_type,
+                decision.event_id,
+                run_id,
+            )
 
         if decision.redacted:
             logger.info(
@@ -406,7 +405,7 @@ class PromptGuardCallbackHandler:
                             texts.append(str(gen.message.content))
                 return "\n".join(texts) if texts else None
         except Exception:
-            pass
+            logger.debug("Failed to extract response text", exc_info=True)
         return None
 
     def _cleanup_run(self, run_id: UUID | None) -> None:

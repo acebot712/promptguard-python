@@ -78,7 +78,7 @@ def _extract_response_text(response: Any) -> str | None:
             parts = response.candidates[0].content.parts
             return _extract_text_from_parts(parts)
     except Exception:
-        pass
+        logger.debug("Failed to extract Google response text", exc_info=True)
     return None
 
 
@@ -116,11 +116,10 @@ def _make_sync_wrapper(original_fn):
                     raise
                 decision = None
 
-            if decision is not None:
-                if decision.blocked:
-                    if get_mode() == "enforce":
-                        raise PromptGuardBlockedError(decision)
-                    logger.warning("[monitor] would block: %s", decision.threat_type)
+            if decision is not None and decision.blocked:
+                if get_mode() == "enforce":
+                    raise PromptGuardBlockedError(decision)
+                logger.warning("[monitor] would block: %s", decision.threat_type)
 
         response = original_fn(self, *args, **kwargs)
 
@@ -172,11 +171,10 @@ def _make_async_wrapper(original_fn):
                     raise
                 decision = None
 
-            if decision is not None:
-                if decision.blocked:
-                    if get_mode() == "enforce":
-                        raise PromptGuardBlockedError(decision)
-                    logger.warning("[monitor] would block: %s", decision.threat_type)
+            if decision is not None and decision.blocked:
+                if get_mode() == "enforce":
+                    raise PromptGuardBlockedError(decision)
+                logger.warning("[monitor] would block: %s", decision.threat_type)
 
         response = await original_fn(self, *args, **kwargs)
 
