@@ -1,6 +1,5 @@
 """
-Shared contract tests — validates the Python SDK against the shared
-fixture file at packages/sdk-shared/guard-contract.json.
+Shared contract tests — validates the Python SDK against guard-contract.json.
 
 If this test fails, the Python SDK has drifted from the cross-SDK
 contract. Fix the SDK, not the contract (unless both SDKs agree on
@@ -12,8 +11,7 @@ from pathlib import Path
 
 import pytest
 
-# Locate the shared contract file relative to this test file.
-CONTRACT_PATH = Path(__file__).resolve().parent.parent.parent / "sdk-shared" / "guard-contract.json"
+CONTRACT_PATH = Path(__file__).resolve().parent / "guard-contract.json"
 
 
 @pytest.fixture(scope="module")
