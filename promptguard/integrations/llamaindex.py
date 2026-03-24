@@ -28,11 +28,7 @@ logger = logging.getLogger("promptguard")
 
 # LlamaIndex callback event types (string constants to avoid import dependency)
 _LLM_EVENT = "llm"
-_EMBEDDING_EVENT = "embedding"
 _QUERY_EVENT = "query"
-_RETRIEVE_EVENT = "retrieve"
-_SYNTHESIZE_EVENT = "synthesize"
-_TEMPLATING_EVENT = "templating"
 
 
 class PromptGuardCallbackHandler:

@@ -311,8 +311,6 @@ from promptguard import PromptGuard, Config
 config = Config(
     api_key="pg_xxx",
     base_url="https://api.promptguard.co/api/v1/proxy",
-    enable_caching=True,
-    enable_security_scan=True,
     timeout=30.0,
 )
 

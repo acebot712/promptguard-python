@@ -289,22 +289,6 @@ class PromptGuardCallbackHandler:
     ) -> None:
         self._cleanup_run(run_id)
 
-    # -- Retriever callbacks (no-ops for now) --------------------------------
-
-    def on_retriever_start(self, *args, **kwargs) -> None:
-        pass
-
-    def on_retriever_end(self, *args, **kwargs) -> None:
-        pass
-
-    def on_retriever_error(self, *args, **kwargs) -> None:
-        pass
-
-    # -- Text callback (legacy) ----------------------------------------------
-
-    def on_text(self, text: str, **kwargs) -> None:
-        pass
-
     # -- Internal helpers ----------------------------------------------------
 
     def _scan_input(
