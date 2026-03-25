@@ -77,7 +77,7 @@ class GuardClient:
     """HTTP client for the PromptGuard Guard API.
 
     Provides both sync and async methods.  The client itself never
-    swallows errors — callers (patches, integrations) decide whether
+    swallows errors; callers (patches, integrations) decide whether
     to fail open or closed based on configuration.
     """
 

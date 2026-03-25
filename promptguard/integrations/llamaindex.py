@@ -1,5 +1,5 @@
 """
-LlamaIndex integration — PromptGuardCallbackHandler for LlamaIndex.
+LlamaIndex integration - PromptGuardCallbackHandler for LlamaIndex.
 
 Hooks into LlamaIndex's callback system to scan LLM prompts and responses
 with rich pipeline context.

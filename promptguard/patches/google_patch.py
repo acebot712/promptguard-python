@@ -1,5 +1,5 @@
 """
-Google Generative AI SDK patch — wraps
+Google Generative AI SDK patch - wraps
 ``google.generativeai.GenerativeModel.generate_content`` (sync + async).
 
 Covers direct Google AI usage and frameworks built on top (LangChain's

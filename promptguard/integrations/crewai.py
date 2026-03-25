@@ -1,12 +1,12 @@
 """
-CrewAI integration — guardrail function and tool wrapper.
+CrewAI integration - guardrail function and tool wrapper.
 
 CrewAI supports ``before_kickoff`` / ``after_kickoff`` hooks on the Crew
 class.  This module provides:
 
-1.  ``promptguard_guardrail`` — a guardrail function for use with
+1.  ``promptguard_guardrail`` - a guardrail function for use with
     CrewAI's ``@before_kickoff`` / ``@after_kickoff`` hooks.
-2.  ``secure_tool`` — a decorator that wraps any CrewAI tool's
+2.  ``secure_tool`` - a decorator that wraps any CrewAI tool's
     ``_run`` method with PromptGuard validation.
 
 Usage::

@@ -1,5 +1,5 @@
 """
-OpenAI SDK patch — wraps ``openai.chat.completions.create`` (sync + async).
+OpenAI SDK patch - wraps ``openai.chat.completions.create`` (sync + async).
 
 This single patch covers every framework built on top of the OpenAI Python
 SDK, including LangChain (ChatOpenAI), CrewAI, AutoGen, Semantic Kernel,

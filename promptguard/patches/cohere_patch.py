@@ -1,5 +1,5 @@
 """
-Cohere SDK patch — wraps ``cohere.Client.chat`` / ``ClientV2.chat``
+Cohere SDK patch - wraps ``cohere.Client.chat`` / ``ClientV2.chat``
 (sync + async).
 
 Covers direct Cohere usage and frameworks that use it (Haystack, LangChain).

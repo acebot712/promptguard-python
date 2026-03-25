@@ -1,5 +1,5 @@
 """
-Anthropic SDK patch — wraps ``anthropic.messages.create`` (sync + async).
+Anthropic SDK patch - wraps ``anthropic.messages.create`` (sync + async).
 
 Covers direct Anthropic SDK usage and frameworks that use it under the
 hood (e.g. LangChain's ChatAnthropic).

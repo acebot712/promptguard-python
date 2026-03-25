@@ -1,5 +1,5 @@
 """
-LangChain integration — PromptGuardCallbackHandler.
+LangChain integration - PromptGuardCallbackHandler.
 
 Implements LangChain's ``BaseCallbackHandler`` to scan prompts before
 LLM calls and responses after, with rich context about chains, tools,
@@ -191,7 +191,7 @@ class PromptGuardCallbackHandler:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        """Called on LLM error — clean up context."""
+        """Called on LLM error - clean up context."""
         self._cleanup_run(run_id)
 
     # -- Chain callbacks -----------------------------------------------------

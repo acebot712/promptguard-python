@@ -43,10 +43,10 @@ response = client.chat.completions.create(
 **Modes:**
 
 ```python
-# Enforce mode (default) — blocks threats
+# Enforce mode (default) - blocks threats
 promptguard.init(api_key="pg_xxx", mode="enforce")
 
-# Monitor mode — logs threats without blocking (shadow mode)
+# Monitor mode - logs threats without blocking (shadow mode)
 promptguard.init(api_key="pg_xxx", mode="monitor")
 
 # Scan responses too
@@ -98,10 +98,10 @@ chain.invoke({"input": "..."}, config={"callbacks": [handler]})
 ```
 
 The handler scans:
-- `on_llm_start` / `on_chat_model_start` — prompts before the LLM call
-- `on_llm_end` — responses after the LLM call
-- `on_tool_start` — tool inputs for injection attempts
-- `on_chain_start/end` — tracks chain context
+- `on_llm_start` / `on_chat_model_start` - prompts before the LLM call
+- `on_llm_end` - responses after the LLM call
+- `on_tool_start` - tool inputs for injection attempts
+- `on_chain_start/end` - tracks chain context
 
 ### CrewAI
 
@@ -258,7 +258,7 @@ async with PromptGuardAsync(api_key="pg_xxx") as pg:
     redacted = await pg.security.redact("My email is john@example.com")
 ```
 
-The async client mirrors the synchronous API — every method available on `PromptGuard` has an `await`-able counterpart on `PromptGuardAsync`.
+The async client mirrors the synchronous API - every method available on `PromptGuard` has an `await`-able counterpart on `PromptGuardAsync`.
 
 ## Retry Logic
 
@@ -274,7 +274,7 @@ pg = PromptGuard(
 )
 ```
 
-Retries use exponential backoff starting from `retry_delay`. Only transient errors (network timeouts, 5xx responses) are retried — client errors (4xx) fail immediately.
+Retries use exponential backoff starting from `retry_delay`. Only transient errors (network timeouts, 5xx responses) are retried; client errors (4xx) fail immediately.
 
 ## Embeddings
 

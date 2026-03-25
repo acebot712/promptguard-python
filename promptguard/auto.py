@@ -2,7 +2,7 @@
 Auto-instrumentation for PromptGuard.
 
 Call ``promptguard.init()`` once at application startup to automatically
-secure *all* LLM calls made through popular SDKs — regardless of which
+secure *all* LLM calls made through popular SDKs, regardless of which
 framework (LangChain, CrewAI, AutoGen, LlamaIndex, …) sits on top.
 
 Usage::
@@ -16,8 +16,8 @@ Usage::
     client.chat.completions.create(...)   # ← scanned by PromptGuard
 
 Modes:
-    * ``"enforce"``  — block requests that violate policies (default)
-    * ``"monitor"``  — log threats but never block (shadow mode)
+    * ``"enforce"``  - block requests that violate policies (default)
+    * ``"monitor"``  - log threats but never block (shadow mode)
 """
 
 import logging
@@ -172,7 +172,7 @@ def _try_revert_patch(patch_module: Any) -> None:
 
 def _apply_patches() -> None:
     """Try to patch every supported SDK.  Missing packages are silently
-    skipped — we only patch what is available."""
+    skipped; we only patch what is available."""
     from promptguard.patches import (
         anthropic_patch,
         bedrock_patch,

@@ -1,5 +1,5 @@
 """
-AWS Bedrock patch — wraps ``botocore`` Bedrock Runtime ``invoke_model``
+AWS Bedrock patch - wraps ``botocore`` Bedrock Runtime ``invoke_model``
 and ``converse`` operations.
 
 Covers AWS-native GenAI apps using boto3/botocore to call Bedrock models

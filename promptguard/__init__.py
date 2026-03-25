@@ -4,7 +4,7 @@ PromptGuard Python SDK
 Drop-in security for AI applications.
 Just change your base URL and add an API key.
 
-Usage (proxy mode — existing):
+Usage (proxy mode - existing):
 
     from promptguard import PromptGuard
 
@@ -14,7 +14,7 @@ Usage (proxy mode — existing):
         messages=[{"role": "user", "content": "Hello!"}]
     )
 
-Usage (auto-instrumentation — new):
+Usage (auto-instrumentation - new):
 
     import promptguard
     promptguard.init(api_key="pg_xxx")
