@@ -7,7 +7,7 @@ Covers:
 - SDK version headers
 """
 
-import asyncio
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -116,35 +116,35 @@ class TestAsyncClientNamespaces:
 
     def test_chat_completions_create_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.chat.completions.create)
+        assert inspect.iscoroutinefunction(c.chat.completions.create)
 
     def test_completions_create_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.completions.create)
+        assert inspect.iscoroutinefunction(c.completions.create)
 
     def test_embeddings_create_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.embeddings.create)
+        assert inspect.iscoroutinefunction(c.embeddings.create)
 
     def test_security_scan_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.security.scan)
+        assert inspect.iscoroutinefunction(c.security.scan)
 
     def test_security_redact_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.security.redact)
+        assert inspect.iscoroutinefunction(c.security.redact)
 
     def test_scrape_url_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.scrape.url)
+        assert inspect.iscoroutinefunction(c.scrape.url)
 
     def test_agent_validate_tool_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.agent.validate_tool)
+        assert inspect.iscoroutinefunction(c.agent.validate_tool)
 
     def test_redteam_run_test_is_coroutine(self):
         c = _make_async_client()
-        assert asyncio.iscoroutinefunction(c.redteam.run_test)
+        assert inspect.iscoroutinefunction(c.redteam.run_test)
 
 
 # ── SDK headers ───────────────────────────────────────────────────────
