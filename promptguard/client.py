@@ -19,7 +19,7 @@ import httpx
 from promptguard.config import Config
 
 _SDK_LANG = "python"
-_SDK_VERSION = "1.5.2"
+_SDK_VERSION = "1.5.3"
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 

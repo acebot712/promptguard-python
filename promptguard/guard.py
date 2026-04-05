@@ -98,7 +98,7 @@ class GuardClient:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "X-PromptGuard-SDK": "python-auto",
-            "X-PromptGuard-Version": "1.5.2",
+            "X-PromptGuard-Version": "1.5.3",
         }
 
     def _ensure_sync_client(self) -> httpx.Client:

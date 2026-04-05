@@ -30,7 +30,7 @@ from promptguard.client import PromptGuard, PromptGuardAsync
 from promptguard.config import Config
 from promptguard.guard import GuardApiError, GuardClient, GuardDecision, PromptGuardBlockedError
 
-__version__ = "1.5.2"
+__version__ = "1.5.3"
 __all__ = [
     "Config",
     "GuardApiError",
