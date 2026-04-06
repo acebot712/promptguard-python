@@ -12,7 +12,6 @@ from promptguard.auto import (
     get_mode,
     init,
     is_fail_open,
-    is_initialized,
     should_scan_responses,
     shutdown,
 )
@@ -34,13 +33,11 @@ class TestInit:
         monkeypatch.setenv("PROMPTGUARD_API_KEY", "pg_test_env")
         with patch("promptguard.auto._apply_patches"):
             init()
-        assert is_initialized()
         assert get_guard_client() is not None
 
     def test_init_explicit_key(self):
         with patch("promptguard.auto._apply_patches"):
             init(api_key="pg_test_explicit")
-        assert is_initialized()
         assert get_guard_client() is not None
 
     def test_init_default_mode_is_enforce(self):
@@ -84,18 +81,17 @@ class TestShutdown:
     def test_shutdown_clears_state(self):
         with patch("promptguard.auto._apply_patches"):
             init(api_key="pg_test")
-        assert is_initialized()
+        assert get_guard_client() is not None
 
         with patch("promptguard.auto._remove_patches"):
             shutdown()
-        assert not is_initialized()
         assert get_guard_client() is None
 
     def test_shutdown_idempotent(self):
         """Calling shutdown without init should not error."""
         with patch("promptguard.auto._remove_patches"):
             shutdown()
-        assert not is_initialized()
+        assert get_guard_client() is None
 
 
 class TestOpenAIPatch:

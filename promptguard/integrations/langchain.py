@@ -19,10 +19,10 @@ Usage::
 """
 
 import logging
-import os
 from typing import Any
 from uuid import UUID
 
+from promptguard._resolve import resolve_credentials
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
@@ -33,26 +33,9 @@ class PromptGuardCallbackHandler:
 
     This class implements the LangChain ``BaseCallbackHandler`` interface
     without importing LangChain at module level (so the SDK doesn't have
-    a hard dependency on it).  LangChain accepts any object with the right
-    methods as a callback handler.
-
-    Parameters
-    ----------
-    api_key:
-        PromptGuard API key.  Falls back to ``PROMPTGUARD_API_KEY``.
-    base_url:
-        Guard API base URL.
-    mode:
-        ``"enforce"`` to block, ``"monitor"`` to log only.
-    scan_responses:
-        Whether to also scan LLM responses (output direction).
-    fail_open:
-        If True, allow the call when the Guard API is unreachable.
-    timeout:
-        HTTP timeout for guard API calls.
+    a hard dependency on it).
     """
 
-    # LangChain checks these flags to decide which callbacks to call.
     raise_error = True
 
     def __init__(
@@ -64,19 +47,7 @@ class PromptGuardCallbackHandler:
         fail_open: bool = True,
         timeout: float = 10.0,
     ):
-        resolved_key = api_key or os.environ.get("PROMPTGUARD_API_KEY", "")
-        if not resolved_key:
-            raise ValueError(
-                "PromptGuard API key required. Pass api_key= or set "
-                "PROMPTGUARD_API_KEY environment variable."
-            )
-
-        resolved_url = (
-            base_url
-            or os.environ.get("PROMPTGUARD_BASE_URL")
-            or "https://api.promptguard.co/api/v1"
-        )
-
+        resolved_key, resolved_url = resolve_credentials(api_key, base_url)
         self._guard = GuardClient(
             api_key=resolved_key,
             base_url=resolved_url,
@@ -85,8 +56,6 @@ class PromptGuardCallbackHandler:
         self._mode = mode
         self._scan_responses = scan_responses
         self._fail_open = fail_open
-
-        # Track chain context per run_id
         self._chain_context: dict[str, dict[str, Any]] = {}
 
     # -- LLM callbacks -------------------------------------------------------
@@ -102,12 +71,11 @@ class PromptGuardCallbackHandler:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Called when an LLM starts running. Scans the prompts."""
         messages = [{"role": "user", "content": p} for p in prompts]
         model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
         context = self._build_context(run_id, parent_run_id, "llm", serialized, tags, metadata)
 
-        decision = self._scan_input(messages, model, context)
+        decision = self._safe_scan(messages, "input", model, context)
         self._handle_decision(decision, run_id)
 
     def on_chat_model_start(
@@ -121,7 +89,6 @@ class PromptGuardCallbackHandler:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Called when a chat model starts. Scans the messages."""
         guard_messages = []
         for message_list in messages:
             for msg in message_list:
@@ -151,15 +118,10 @@ class PromptGuardCallbackHandler:
 
         model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
         context = self._build_context(
-            run_id,
-            parent_run_id,
-            "chat_model",
-            serialized,
-            tags,
-            metadata,
+            run_id, parent_run_id, "chat_model", serialized, tags, metadata
         )
 
-        decision = self._scan_input(guard_messages, model, context)
+        decision = self._safe_scan(guard_messages, "input", model, context)
         self._handle_decision(decision, run_id)
 
     def on_llm_end(
@@ -170,7 +132,6 @@ class PromptGuardCallbackHandler:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        """Called when an LLM finishes. Optionally scans the response."""
         if not self._scan_responses:
             return
 
@@ -180,7 +141,7 @@ class PromptGuardCallbackHandler:
 
         messages = [{"role": "assistant", "content": text}]
         context = self._build_context(run_id, parent_run_id, "llm_response")
-        decision = self._scan_output(messages, context)
+        decision = self._safe_scan(messages, "output", context=context)
         self._handle_decision(decision, run_id)
 
     def on_llm_error(
@@ -191,7 +152,6 @@ class PromptGuardCallbackHandler:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        """Called on LLM error - clean up context."""
         self._cleanup_run(run_id)
 
     # -- Chain callbacks -----------------------------------------------------
@@ -207,7 +167,6 @@ class PromptGuardCallbackHandler:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Track chain context for richer threat detection."""
         run_key = str(run_id) if run_id else "unknown"
         chain_name = serialized.get("id", [""])[-1] if serialized.get("id") else "unknown"
         self._chain_context[run_key] = {
@@ -224,7 +183,6 @@ class PromptGuardCallbackHandler:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        """Clean up chain context."""
         self._cleanup_run(run_id)
 
     def on_chain_error(
@@ -250,14 +208,13 @@ class PromptGuardCallbackHandler:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Scan tool inputs for injection attempts."""
         tool_name = serialized.get("name") or serialized.get("id", [""])[-1]
         messages = [{"role": "user", "content": input_str}]
         context = self._build_context(run_id, parent_run_id, "tool", serialized, tags, metadata)
         context["metadata"] = context.get("metadata", {})
         context["metadata"]["tool_name"] = tool_name
 
-        decision = self._scan_input(messages, "tool", context)
+        decision = self._safe_scan(messages, "input", "tool", context)
         self._handle_decision(decision, run_id)
 
     def on_tool_end(
@@ -268,7 +225,6 @@ class PromptGuardCallbackHandler:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        """Optionally scan tool outputs."""
         if not self._scan_responses:
             return
         text = str(output) if output else ""
@@ -276,7 +232,7 @@ class PromptGuardCallbackHandler:
             return
         messages = [{"role": "assistant", "content": text}]
         context = self._build_context(run_id, parent_run_id, "tool_response")
-        decision = self._scan_output(messages, context)
+        decision = self._safe_scan(messages, "output", context=context)
         self._handle_decision(decision, run_id)
 
     def on_tool_error(
@@ -291,40 +247,24 @@ class PromptGuardCallbackHandler:
 
     # -- Internal helpers ----------------------------------------------------
 
-    def _scan_input(
+    def _safe_scan(
         self,
         messages: list[dict[str, str]],
-        model: str | None,
-        context: dict[str, Any],
+        direction: str,
+        model: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> GuardDecision | None:
         try:
             return self._guard.scan(
                 messages=messages,
-                direction="input",
+                direction=direction,
                 model=model,
                 context=context,
             )
         except Exception:
             if not self._fail_open:
                 raise
-            logger.warning("Guard API unavailable, allowing request (fail_open=True)")
-            return None
-
-    def _scan_output(
-        self,
-        messages: list[dict[str, str]],
-        context: dict[str, Any],
-    ) -> GuardDecision | None:
-        try:
-            return self._guard.scan(
-                messages=messages,
-                direction="output",
-                context=context,
-            )
-        except Exception:
-            if not self._fail_open:
-                raise
-            logger.warning("Guard API unavailable, allowing response (fail_open=True)")
+            logger.warning("Guard API unavailable, allowing %s (fail_open=True)", direction)
             return None
 
     def _handle_decision(self, decision: GuardDecision | None, run_id: UUID | None) -> None:
@@ -364,7 +304,7 @@ class PromptGuardCallbackHandler:
         if parent_key and parent_key in self._chain_context:
             chain_info = self._chain_context[parent_key]
 
-        context: dict[str, Any] = {
+        return {
             "framework": "langchain",
             "chain_name": chain_info.get("chain_name"),
             "session_id": run_key,
@@ -374,10 +314,8 @@ class PromptGuardCallbackHandler:
                 **(metadata or {}),
             },
         }
-        return context
 
     def _extract_llm_response(self, response: Any) -> str | None:
-        """Extract text from a LangChain LLMResult."""
         try:
             if hasattr(response, "generations") and response.generations:
                 texts = []

@@ -21,19 +21,17 @@ Modes:
 """
 
 import logging
-import os
 from typing import Any
 
+from promptguard._resolve import resolve_credentials
 from promptguard.guard import GuardClient
 
 logger = logging.getLogger("promptguard")
 
-# Global state managed by init() / shutdown().
 _guard_client: GuardClient | None = None
 _mode: str = "enforce"
 _fail_open: bool = True
 _scan_responses: bool = False
-_initialized: bool = False
 
 
 def init(
@@ -45,10 +43,6 @@ def init(
     timeout: float = 10.0,
 ) -> None:
     """Initialise PromptGuard auto-instrumentation.
-
-    This monkey-patches the ``create()`` methods on popular LLM SDKs so
-    every call is scanned by the PromptGuard Guard API before (and
-    optionally after) the LLM is invoked.
 
     Parameters
     ----------
@@ -68,18 +62,9 @@ def init(
     timeout:
         HTTP timeout (seconds) for Guard API calls.
     """
-    global _guard_client, _mode, _fail_open, _scan_responses, _initialized
+    global _guard_client, _mode, _fail_open, _scan_responses
 
-    resolved_key = api_key or os.environ.get("PROMPTGUARD_API_KEY", "")
-    if not resolved_key:
-        raise ValueError(
-            "PromptGuard API key required. Pass api_key= or set the "
-            "PROMPTGUARD_API_KEY environment variable."
-        )
-
-    resolved_url = (
-        base_url or os.environ.get("PROMPTGUARD_BASE_URL") or "https://api.promptguard.co/api/v1"
-    )
+    resolved_key, resolved_url = resolve_credentials(api_key, base_url)
 
     if mode not in ("enforce", "monitor"):
         raise ValueError("mode must be 'enforce' or 'monitor'")
@@ -92,9 +77,7 @@ def init(
     _mode = mode
     _fail_open = fail_open
     _scan_responses = scan_responses
-    _initialized = True
 
-    # Apply patches for every SDK that is already imported (or importable).
     _apply_patches()
 
     logger.info(
@@ -106,7 +89,7 @@ def init(
 
 def shutdown() -> None:
     """Remove all patches and close the guard client."""
-    global _guard_client, _initialized
+    global _guard_client
 
     _remove_patches()
 
@@ -114,7 +97,6 @@ def shutdown() -> None:
         _guard_client.close()
         _guard_client = None
 
-    _initialized = False
     logger.info("PromptGuard auto-instrumentation shut down")
 
 
@@ -122,7 +104,6 @@ def shutdown() -> None:
 
 
 def get_guard_client() -> GuardClient | None:
-    """Return the global GuardClient (or None if not initialised)."""
     return _guard_client
 
 
@@ -138,17 +119,12 @@ def should_scan_responses() -> bool:
     return _scan_responses
 
 
-def is_initialized() -> bool:
-    return _initialized
-
-
 # -- Patch orchestration -----------------------------------------------------
 
 _applied_patches: list = []
 
 
 def _try_apply_patch(patch_module: Any) -> None:
-    """Attempt to apply a single patch module, logging failures."""
     try:
         if patch_module.apply():
             _applied_patches.append(patch_module)
@@ -162,7 +138,6 @@ def _try_apply_patch(patch_module: Any) -> None:
 
 
 def _try_revert_patch(patch_module: Any) -> None:
-    """Attempt to revert a single patch module, logging failures."""
     try:
         patch_module.revert()
         logger.debug("Reverted %s", patch_module.NAME)
@@ -171,8 +146,7 @@ def _try_revert_patch(patch_module: Any) -> None:
 
 
 def _apply_patches() -> None:
-    """Try to patch every supported SDK.  Missing packages are silently
-    skipped; we only patch what is available."""
+    """Patch every supported SDK.  Missing packages are silently skipped."""
     from promptguard.patches import (
         anthropic_patch,
         bedrock_patch,

@@ -1,17 +1,9 @@
 """
 CrewAI integration - guardrail function and tool wrapper.
 
-CrewAI supports ``before_kickoff`` / ``after_kickoff`` hooks on the Crew
-class.  This module provides:
-
-1.  ``promptguard_guardrail`` - a guardrail function for use with
-    CrewAI's ``@before_kickoff`` / ``@after_kickoff`` hooks.
-2.  ``secure_tool`` - a decorator that wraps any CrewAI tool's
-    ``_run`` method with PromptGuard validation.
-
 Usage::
 
-    from crewai import Crew, Agent, Task
+    from crewai import Crew
     from promptguard.integrations.crewai import PromptGuardGuardrail
 
     pg = PromptGuardGuardrail(api_key="pg_xxx")
@@ -33,31 +25,17 @@ Usage::
 
 import functools
 import logging
-import os
 from collections.abc import Callable
 from typing import Any
 
-from promptguard.guard import GuardClient, PromptGuardBlockedError
+from promptguard._resolve import resolve_credentials
+from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
 
 
 class PromptGuardGuardrail:
-    """CrewAI guardrail that scans inputs/outputs via the Guard API.
-
-    Parameters
-    ----------
-    api_key:
-        PromptGuard API key.
-    base_url:
-        Guard API base URL.
-    mode:
-        ``"enforce"`` to block, ``"monitor"`` to log only.
-    fail_open:
-        Allow execution when Guard API is unreachable.
-    timeout:
-        HTTP timeout for guard API calls.
-    """
+    """CrewAI guardrail that scans inputs/outputs via the Guard API."""
 
     def __init__(
         self,
@@ -67,19 +45,7 @@ class PromptGuardGuardrail:
         fail_open: bool = True,
         timeout: float = 10.0,
     ):
-        resolved_key = api_key or os.environ.get("PROMPTGUARD_API_KEY", "")
-        if not resolved_key:
-            raise ValueError(
-                "PromptGuard API key required. Pass api_key= or set "
-                "PROMPTGUARD_API_KEY environment variable."
-            )
-
-        resolved_url = (
-            base_url
-            or os.environ.get("PROMPTGUARD_BASE_URL")
-            or "https://api.promptguard.co/api/v1"
-        )
-
+        resolved_key, resolved_url = resolve_credentials(api_key, base_url)
         self._guard = GuardClient(
             api_key=resolved_key,
             base_url=resolved_url,
@@ -89,42 +55,15 @@ class PromptGuardGuardrail:
         self._fail_open = fail_open
 
     def before_kickoff(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Scan crew inputs before kickoff.
-
-        Suitable for use as ``Crew(before_kickoff=pg.before_kickoff)``.
-        Scans all string values in the inputs dict.
-        """
+        """Scan crew inputs before kickoff."""
         messages = self._inputs_to_messages(inputs)
         if not messages:
             return inputs
 
-        context = {
-            "framework": "crewai",
-            "metadata": {"hook": "before_kickoff"},
-        }
+        context = {"framework": "crewai", "metadata": {"hook": "before_kickoff"}}
+        decision = self._scan_and_check(messages, "input", context)
 
-        try:
-            decision = self._guard.scan(
-                messages=messages,
-                direction="input",
-                context=context,
-            )
-        except Exception:
-            if not self._fail_open:
-                raise
-            logger.warning("Guard API unavailable, allowing crew kickoff (fail_open=True)")
-            return inputs
-
-        if decision.blocked:
-            if self._mode == "enforce":
-                raise PromptGuardBlockedError(decision)
-            logger.warning(
-                "[monitor] PromptGuard would block crew input: %s (event=%s)",
-                decision.threat_type,
-                decision.event_id,
-            )
-
-        if decision.redacted and decision.redacted_messages:
+        if decision and decision.redacted and decision.redacted_messages:
             if self._mode == "enforce":
                 return self._apply_redaction(inputs, decision.redacted_messages)
             logger.warning(
@@ -135,74 +74,57 @@ class PromptGuardGuardrail:
         return inputs
 
     def after_kickoff(self, result: Any) -> Any:
-        """Scan crew output after kickoff.
-
-        Suitable for use as ``Crew(after_kickoff=pg.after_kickoff)``.
-        """
+        """Scan crew output after kickoff."""
         text = str(result) if result else ""
         if not text:
             return result
 
         messages = [{"role": "assistant", "content": text}]
-        context = {
-            "framework": "crewai",
-            "metadata": {"hook": "after_kickoff"},
-        }
-
-        try:
-            decision = self._guard.scan(
-                messages=messages,
-                direction="output",
-                context=context,
-            )
-        except Exception:
-            if not self._fail_open:
-                raise
-            logger.warning("Guard API unavailable, allowing crew output (fail_open=True)")
-            return result
-
-        if decision.blocked:
-            if self._mode == "enforce":
-                raise PromptGuardBlockedError(decision)
-            logger.warning(
-                "[monitor] PromptGuard would block crew output: %s (event=%s)",
-                decision.threat_type,
-                decision.event_id,
-            )
-
+        context = {"framework": "crewai", "metadata": {"hook": "after_kickoff"}}
+        self._scan_and_check(messages, "output", context)
         return result
 
     def scan_task_output(self, output: str, task_name: str = "unknown") -> str:
-        """Scan an individual task's output.
-
-        Can be used as a CrewAI task ``output_validator`` or called
-        manually between tasks.
-        """
+        """Scan an individual task's output."""
         messages = [{"role": "assistant", "content": output}]
         context = {
             "framework": "crewai",
             "metadata": {"hook": "task_output", "task_name": task_name},
         }
+        self._scan_and_check(messages, "output", context)
+        return output
 
+    # -- Internal helpers ----------------------------------------------------
+
+    def _scan_and_check(
+        self,
+        messages: list[dict[str, str]],
+        direction: str,
+        context: dict[str, Any],
+    ) -> GuardDecision | None:
+        """Scan content and handle the block decision.  Returns the decision."""
         try:
             decision = self._guard.scan(
                 messages=messages,
-                direction="output",
+                direction=direction,
                 context=context,
             )
         except Exception:
             if not self._fail_open:
                 raise
-            return output
+            logger.warning("Guard API unavailable, allowing request (fail_open=True)")
+            return None
 
         if decision.blocked:
             if self._mode == "enforce":
                 raise PromptGuardBlockedError(decision)
             logger.warning(
-                "[monitor] PromptGuard would block task output: %s", decision.threat_type
+                "[monitor] PromptGuard would block: %s (event=%s)",
+                decision.threat_type,
+                decision.event_id,
             )
 
-        return output
+        return decision
 
     @staticmethod
     def _inputs_to_messages(inputs: dict[str, Any]) -> list[dict[str, str]]:
@@ -236,23 +158,8 @@ def secure_tool(
     mode: str = "enforce",
     fail_open: bool = True,
 ) -> Callable:
-    """Decorator to wrap a CrewAI tool's ``_run`` method with PromptGuard.
-
-    Usage::
-
-        @secure_tool(api_key="pg_xxx")
-        class SearchTool(BaseTool):
-            name = "search"
-            description = "Search the web"
-
-            def _run(self, query: str) -> str:
-                ...
-    """
-    resolved_key = api_key or os.environ.get("PROMPTGUARD_API_KEY", "")
-    resolved_url = (
-        base_url or os.environ.get("PROMPTGUARD_BASE_URL") or "https://api.promptguard.co/api/v1"
-    )
-
+    """Decorator to wrap a CrewAI tool's ``_run`` method with PromptGuard."""
+    resolved_key, resolved_url = resolve_credentials(api_key, base_url)
     guard = GuardClient(api_key=resolved_key, base_url=resolved_url)
 
     def decorator(cls):

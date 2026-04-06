@@ -12,21 +12,18 @@ Usage::
     pg_handler = PromptGuardCallbackHandler(api_key="pg_xxx")
     callback_manager = CallbackManager([pg_handler])
 
-    # Pass to any LlamaIndex component
     from llama_index.core import Settings
     Settings.callback_manager = callback_manager
 """
 
 import logging
-import os
 from typing import Any
 
+from promptguard._resolve import resolve_credentials
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
 
-
-# LlamaIndex callback event types (string constants to avoid import dependency)
 _LLM_EVENT = "llm"
 _QUERY_EVENT = "query"
 
@@ -36,23 +33,6 @@ class PromptGuardCallbackHandler:
 
     Implements the LlamaIndex ``BaseCallbackHandler`` interface without
     importing LlamaIndex at module level.
-
-    Parameters
-    ----------
-    api_key:
-        PromptGuard API key.
-    base_url:
-        Guard API base URL.
-    mode:
-        ``"enforce"`` to block, ``"monitor"`` to log only.
-    scan_responses:
-        Also scan LLM responses.
-    fail_open:
-        Allow calls when Guard API is unreachable.
-    event_starts_to_ignore:
-        LlamaIndex event types to ignore on start.
-    event_ends_to_ignore:
-        LlamaIndex event types to ignore on end.
     """
 
     def __init__(
@@ -66,19 +46,7 @@ class PromptGuardCallbackHandler:
         event_starts_to_ignore: list[str] | None = None,
         event_ends_to_ignore: list[str] | None = None,
     ):
-        resolved_key = api_key or os.environ.get("PROMPTGUARD_API_KEY", "")
-        if not resolved_key:
-            raise ValueError(
-                "PromptGuard API key required. Pass api_key= or set "
-                "PROMPTGUARD_API_KEY environment variable."
-            )
-
-        resolved_url = (
-            base_url
-            or os.environ.get("PROMPTGUARD_BASE_URL")
-            or "https://api.promptguard.co/api/v1"
-        )
-
+        resolved_key, resolved_url = resolve_credentials(api_key, base_url)
         self._guard = GuardClient(
             api_key=resolved_key,
             base_url=resolved_url,
@@ -87,11 +55,8 @@ class PromptGuardCallbackHandler:
         self._mode = mode
         self._scan_responses = scan_responses
         self._fail_open = fail_open
-
         self.event_starts_to_ignore = event_starts_to_ignore or []
         self.event_ends_to_ignore = event_ends_to_ignore or []
-
-        # Track event context
         self._event_context: dict[str, dict[str, Any]] = {}
 
     def on_event_start(
@@ -102,7 +67,6 @@ class PromptGuardCallbackHandler:
         parent_id: str = "",
         **kwargs: Any,
     ) -> str:
-        """Called when a LlamaIndex event starts."""
         if event_type in self.event_starts_to_ignore:
             return event_id
 
@@ -125,7 +89,6 @@ class PromptGuardCallbackHandler:
         event_id: str = "",
         **kwargs: Any,
     ) -> None:
-        """Called when a LlamaIndex event ends."""
         if event_type in self.event_ends_to_ignore:
             return
 
@@ -138,19 +101,18 @@ class PromptGuardCallbackHandler:
         self._event_context.pop(event_id, None)
 
     def start_trace(self, trace_id: str | None = None) -> None:
-        """Called at the start of a trace (no-op)."""
+        pass
 
     def end_trace(
         self,
         trace_id: str | None = None,
         trace_map: dict[str, list[str]] | None = None,
     ) -> None:
-        """Called at the end of a trace (clean up)."""
+        pass
 
     # -- LLM event scanning --------------------------------------------------
 
     def _scan_llm_start(self, payload: dict[str, Any], event_id: str) -> None:
-        """Scan LLM prompt before the call."""
         messages = self._extract_messages_from_payload(payload)
         if not messages:
             return
@@ -166,7 +128,6 @@ class PromptGuardCallbackHandler:
         self._handle_decision(decision, event_id)
 
     def _scan_llm_end(self, payload: dict[str, Any], event_id: str) -> None:
-        """Scan LLM response after the call."""
         text = self._extract_response_from_payload(payload)
         if not text:
             return
@@ -182,7 +143,6 @@ class PromptGuardCallbackHandler:
         self._handle_decision(decision, event_id)
 
     def _scan_query_start(self, payload: dict[str, Any], event_id: str) -> None:
-        """Scan query input."""
         query_str = payload.get("query_str") or payload.get("query")
         if not query_str or not isinstance(query_str, str):
             return
@@ -198,7 +158,6 @@ class PromptGuardCallbackHandler:
         self._handle_decision(decision, event_id)
 
     def _scan_query_end(self, payload: dict[str, Any], event_id: str) -> None:
-        """Scan query response."""
         response = payload.get("response")
         if not response:
             return
@@ -220,10 +179,8 @@ class PromptGuardCallbackHandler:
     # -- Helpers -------------------------------------------------------------
 
     def _extract_messages_from_payload(self, payload: dict[str, Any]) -> list[dict[str, str]]:
-        """Extract messages from LlamaIndex LLM payload."""
         messages = []
 
-        # Check for messages key (chat models)
         raw_messages = payload.get("messages")
         if raw_messages:
             for msg in raw_messages:
@@ -252,12 +209,10 @@ class PromptGuardCallbackHandler:
                     )
             return messages
 
-        # Check for prompt key (completion models)
         prompt = payload.get("prompt") or payload.get("formatted_prompt")
         if prompt and isinstance(prompt, str):
             messages.append({"role": "user", "content": prompt})
 
-        # Check for template + template_vars
         template = payload.get("template")
         if template and isinstance(template, str) and not messages:
             messages.append({"role": "user", "content": template})
@@ -265,7 +220,6 @@ class PromptGuardCallbackHandler:
         return messages
 
     def _extract_response_from_payload(self, payload: dict[str, Any]) -> str | None:
-        """Extract response text from LlamaIndex LLM response payload."""
         response = payload.get("response") or payload.get("completion")
         if response:
             if isinstance(response, str):
@@ -276,7 +230,6 @@ class PromptGuardCallbackHandler:
                 return str(response.message.content)
             return str(response)
 
-        # Check for raw response
         raw = payload.get("raw")
         if raw and hasattr(raw, "text"):
             return raw.text
@@ -287,8 +240,8 @@ class PromptGuardCallbackHandler:
         self,
         messages: list[dict[str, str]],
         direction: str,
-        model: str | None,
-        context: dict[str, Any],
+        model: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> GuardDecision | None:
         try:
             return self._guard.scan(

@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from promptguard._version import __version__
+
 logger = logging.getLogger("promptguard")
 
 
@@ -98,7 +100,7 @@ class GuardClient:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "X-PromptGuard-SDK": "python-auto",
-            "X-PromptGuard-Version": "1.5.3",
+            "X-PromptGuard-Version": __version__,
         }
 
     def _ensure_sync_client(self) -> httpx.Client:
@@ -111,6 +113,15 @@ class GuardClient:
             self._async_client = httpx.AsyncClient(timeout=self._timeout)
         return self._async_client
 
+    def _check_response(self, resp: httpx.Response) -> GuardDecision:
+        """Validate response status and parse into a GuardDecision."""
+        if resp.status_code >= 400:
+            raise GuardApiError(
+                f"Guard API returned {resp.status_code}: {resp.text[:200]}",
+                status_code=resp.status_code,
+            )
+        return GuardDecision(resp.json())
+
     def scan(
         self,
         messages: list[dict[str, str]],
@@ -118,29 +129,14 @@ class GuardClient:
         model: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> GuardDecision:
-        """Synchronous scan via the guard API.
-
-        Raises ``GuardApiError`` on network or API errors so the caller
-        can decide whether to fail open or closed.
-        """
+        """Synchronous scan via the guard API."""
         payload = self._build_payload(messages, direction, model, context)
         client = self._ensure_sync_client()
         try:
-            resp = client.post(
-                self._guard_url,
-                json=payload,
-                headers=self._get_headers(),
-            )
+            resp = client.post(self._guard_url, json=payload, headers=self._get_headers())
         except Exception as exc:
             raise GuardApiError(f"Guard API call failed: {exc}") from exc
-
-        if resp.status_code >= 400:
-            raise GuardApiError(
-                f"Guard API returned {resp.status_code}: {resp.text[:200]}",
-                status_code=resp.status_code,
-            )
-
-        return GuardDecision(resp.json())
+        return self._check_response(resp)
 
     async def scan_async(
         self,
@@ -149,29 +145,14 @@ class GuardClient:
         model: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> GuardDecision:
-        """Asynchronous scan via the guard API.
-
-        Raises ``GuardApiError`` on network or API errors so the caller
-        can decide whether to fail open or closed.
-        """
+        """Asynchronous scan via the guard API."""
         payload = self._build_payload(messages, direction, model, context)
         client = self._ensure_async_client()
         try:
-            resp = await client.post(
-                self._guard_url,
-                json=payload,
-                headers=self._get_headers(),
-            )
+            resp = await client.post(self._guard_url, json=payload, headers=self._get_headers())
         except Exception as exc:
             raise GuardApiError(f"Guard API call failed: {exc}") from exc
-
-        if resp.status_code >= 400:
-            raise GuardApiError(
-                f"Guard API returned {resp.status_code}: {resp.text[:200]}",
-                status_code=resp.status_code,
-            )
-
-        return GuardDecision(resp.json())
+        return self._check_response(resp)
 
     @staticmethod
     def _build_payload(

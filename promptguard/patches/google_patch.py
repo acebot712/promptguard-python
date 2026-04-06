@@ -6,10 +6,11 @@ Covers direct Google AI usage and frameworks built on top (LangChain's
 ChatGoogleGenerativeAI, LlamaIndex's Gemini integration, etc.).
 """
 
-import functools
 import importlib.util
 import logging
 from typing import Any
+
+from promptguard.patches._base import wrap_async, wrap_sync
 
 logger = logging.getLogger("promptguard")
 
@@ -20,9 +21,7 @@ _original_async_generate = None
 _patched = False
 
 
-# ---------------------------------------------------------------------------
-# Message extraction (Google-specific)
-# ---------------------------------------------------------------------------
+# -- Message extraction (Google-specific) ------------------------------------
 
 
 def _content_to_guard_format(contents: Any) -> list[dict[str, str]]:
@@ -33,7 +32,7 @@ def _content_to_guard_format(contents: Any) -> list[dict[str, str]]:
         result.append({"role": "user", "content": contents})
         return result
 
-    if not isinstance(contents, (list, tuple)):
+    if not isinstance(contents, list | tuple):
         result.append({"role": "user", "content": str(contents)})
         return result
 
@@ -70,6 +69,30 @@ def _extract_text_from_parts(parts: Any) -> str:
     return "\n".join(texts)
 
 
+# -- Extractors compatible with _base.wrap_sync / wrap_async -----------------
+
+
+def _extract_messages(
+    args: tuple, kwargs: dict
+) -> tuple[list[dict[str, str]], str | None, dict[str, Any]]:
+    """Extract guard messages from GenerativeModel.generate_content args.
+
+    ``args[0]`` is ``self`` (the GenerativeModel instance) because we're
+    patching an unbound method on the class.
+    """
+    model_instance = args[0] if args else None
+    contents = kwargs.get("contents") or (args[1] if len(args) > 1 else None)
+    model_name = getattr(model_instance, "model_name", None) or getattr(
+        model_instance, "_model_name", None
+    )
+    guard_messages = _content_to_guard_format(contents) if contents else []
+    return (
+        guard_messages,
+        str(model_name) if model_name else "gemini",
+        {"framework": "google-generativeai"},
+    )
+
+
 def _extract_response_text(response: Any) -> str | None:
     try:
         if hasattr(response, "text"):
@@ -82,126 +105,7 @@ def _extract_response_text(response: Any) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Wrappers (Google's generate_content takes ``self`` as first arg, so we
-# can't directly use the generic wrap_sync/wrap_async which expect a plain
-# function.  We use thin wrappers that delegate to the guard client.)
-# ---------------------------------------------------------------------------
-
-
-def _make_sync_wrapper(original_fn):
-    @functools.wraps(original_fn)
-    def wrapper(self, *args, **kwargs):
-        from promptguard.auto import get_guard_client, get_mode, is_fail_open, should_scan_responses
-        from promptguard.guard import GuardApiError, PromptGuardBlockedError
-
-        guard = get_guard_client()
-        if guard is None:
-            return original_fn(self, *args, **kwargs)
-
-        contents = kwargs.get("contents") or (args[0] if args else None)
-        model_name = getattr(self, "model_name", None) or getattr(self, "_model_name", None)
-
-        if contents:
-            guard_messages = _content_to_guard_format(contents)
-            try:
-                decision = guard.scan(
-                    messages=guard_messages,
-                    direction="input",
-                    model=str(model_name) if model_name else "gemini",
-                    context={"framework": "google-generativeai"},
-                )
-            except GuardApiError:
-                if not is_fail_open():
-                    raise
-                decision = None
-
-            if decision is not None and decision.blocked:
-                if get_mode() == "enforce":
-                    raise PromptGuardBlockedError(decision)
-                logger.warning("[monitor] would block: %s", decision.threat_type)
-
-        response = original_fn(self, *args, **kwargs)
-
-        if should_scan_responses() and response and guard:
-            try:
-                resp_text = _extract_response_text(response)
-                if resp_text:
-                    resp_decision = guard.scan(
-                        messages=[{"role": "assistant", "content": resp_text}],
-                        direction="output",
-                        model=str(model_name) if model_name else "gemini",
-                    )
-                    if resp_decision.blocked and get_mode() == "enforce":
-                        raise PromptGuardBlockedError(resp_decision)
-            except (PromptGuardBlockedError, GuardApiError):
-                raise
-            except Exception:
-                logger.debug("Response scanning failed", exc_info=True)
-
-        return response
-
-    return wrapper
-
-
-def _make_async_wrapper(original_fn):
-    @functools.wraps(original_fn)
-    async def wrapper(self, *args, **kwargs):
-        from promptguard.auto import get_guard_client, get_mode, is_fail_open, should_scan_responses
-        from promptguard.guard import GuardApiError, PromptGuardBlockedError
-
-        guard = get_guard_client()
-        if guard is None:
-            return await original_fn(self, *args, **kwargs)
-
-        contents = kwargs.get("contents") or (args[0] if args else None)
-        model_name = getattr(self, "model_name", None) or getattr(self, "_model_name", None)
-
-        if contents:
-            guard_messages = _content_to_guard_format(contents)
-            try:
-                decision = await guard.scan_async(
-                    messages=guard_messages,
-                    direction="input",
-                    model=str(model_name) if model_name else "gemini",
-                    context={"framework": "google-generativeai"},
-                )
-            except GuardApiError:
-                if not is_fail_open():
-                    raise
-                decision = None
-
-            if decision is not None and decision.blocked:
-                if get_mode() == "enforce":
-                    raise PromptGuardBlockedError(decision)
-                logger.warning("[monitor] would block: %s", decision.threat_type)
-
-        response = await original_fn(self, *args, **kwargs)
-
-        if should_scan_responses() and response and guard:
-            try:
-                resp_text = _extract_response_text(response)
-                if resp_text:
-                    resp_decision = await guard.scan_async(
-                        messages=[{"role": "assistant", "content": resp_text}],
-                        direction="output",
-                        model=str(model_name) if model_name else "gemini",
-                    )
-                    if resp_decision.blocked and get_mode() == "enforce":
-                        raise PromptGuardBlockedError(resp_decision)
-            except (PromptGuardBlockedError, GuardApiError):
-                raise
-            except Exception:
-                logger.debug("Response scanning failed", exc_info=True)
-
-        return response
-
-    return wrapper
-
-
-# ---------------------------------------------------------------------------
-# Apply / revert
-# ---------------------------------------------------------------------------
+# -- Apply / revert ----------------------------------------------------------
 
 
 def apply() -> bool:
@@ -217,7 +121,11 @@ def apply() -> bool:
         from google.generativeai import GenerativeModel
 
         _original_sync_generate = GenerativeModel.generate_content
-        GenerativeModel.generate_content = _make_sync_wrapper(GenerativeModel.generate_content)
+        GenerativeModel.generate_content = wrap_sync(
+            GenerativeModel.generate_content,
+            _extract_messages,
+            _extract_response_text,
+        )
     except (ImportError, AttributeError):
         logger.debug("Could not patch google GenerativeModel.generate_content")
 
@@ -226,8 +134,10 @@ def apply() -> bool:
 
         if hasattr(GenerativeModel, "generate_content_async"):
             _original_async_generate = GenerativeModel.generate_content_async
-            GenerativeModel.generate_content_async = _make_async_wrapper(
-                GenerativeModel.generate_content_async
+            GenerativeModel.generate_content_async = wrap_async(
+                GenerativeModel.generate_content_async,
+                _extract_messages,
+                _extract_response_text,
             )
     except (ImportError, AttributeError):
         logger.debug("Could not patch google GenerativeModel.generate_content_async")

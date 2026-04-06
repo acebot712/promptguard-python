@@ -9,9 +9,10 @@ Every patch needs the same pre-call / post-call flow:
 5. Optionally scan the response
 
 This module provides ``wrap_sync`` and ``wrap_async`` so each patch only
-needs to supply two functions:
+needs to supply:
 - ``extract_messages(args, kwargs) -> (guard_messages, model, context)``
 - ``extract_response(response) -> Optional[str]``
+- (optional) ``should_intercept(args, kwargs) -> bool``
 """
 
 import functools
@@ -19,7 +20,53 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from promptguard.guard import GuardApiError, PromptGuardBlockedError
+
 logger = logging.getLogger("promptguard")
+
+
+# -- Shared decision helpers (used by both sync and async wrappers) ----------
+
+
+def _handle_pre_scan_decision(
+    decision: Any,
+    get_mode: Callable[[], str],
+    apply_redaction: Callable | None,
+    args: tuple,
+    kwargs: dict,
+) -> dict:
+    """Process a pre-call guard decision.  Returns (possibly modified) kwargs."""
+    if decision is None:
+        return kwargs
+
+    if decision.blocked:
+        if get_mode() == "enforce":
+            raise PromptGuardBlockedError(decision)
+        logger.warning(
+            "[monitor] PromptGuard would block: %s (event=%s)",
+            decision.threat_type,
+            decision.event_id,
+        )
+
+    if decision.redacted and decision.redacted_messages:
+        if get_mode() == "enforce" and apply_redaction:
+            return apply_redaction(args, kwargs, decision.redacted_messages)
+        logger.warning(
+            "[monitor] PromptGuard would redact: %s (event=%s)",
+            decision.threat_type,
+            decision.event_id,
+        )
+
+    return kwargs
+
+
+def _handle_response_block(resp_decision: Any, get_mode: Callable[[], str]) -> None:
+    """Raise if a response scan decision blocks in enforce mode."""
+    if resp_decision.blocked and get_mode() == "enforce":
+        raise PromptGuardBlockedError(resp_decision)
+
+
+# -- Public wrappers ---------------------------------------------------------
 
 
 def wrap_sync(
@@ -27,6 +74,7 @@ def wrap_sync(
     extract_messages: Callable[..., tuple[list[dict[str, str]], str | None, dict[str, Any]]],
     extract_response: Callable[[Any], str | None],
     apply_redaction: Callable | None = None,
+    should_intercept: Callable[..., bool] | None = None,
 ) -> Callable:
     """Create a sync wrapper that scans before/after the original call.
 
@@ -36,25 +84,26 @@ def wrap_sync(
         The original SDK method (e.g. ``Completions.create``).
     extract_messages:
         ``(args, kwargs) -> (guard_messages, model_name, context_dict)``.
-        Returns the messages to scan, the model name, and framework context.
     extract_response:
-        ``(response) -> Optional[str]``.  Extracts text from the response
-        for output scanning.  Return ``None`` to skip.
+        ``(response) -> Optional[str]``.  Return ``None`` to skip.
     apply_redaction:
-        Optional ``(args, kwargs, redacted_messages) -> kwargs`` that
-        applies redacted content back into the call's kwargs.
+        Optional ``(args, kwargs, redacted_messages) -> kwargs``.
+    should_intercept:
+        Optional ``(args, kwargs) -> bool``.  When provided, the wrapper
+        calls the original function directly if this returns ``False``.
     """
 
     @functools.wraps(original_fn)
     def wrapper(*args, **kwargs):
+        if should_intercept and not should_intercept(args, kwargs):
+            return original_fn(*args, **kwargs)
+
         from promptguard.auto import get_guard_client, get_mode, is_fail_open, should_scan_responses
-        from promptguard.guard import GuardApiError, PromptGuardBlockedError
 
         guard = get_guard_client()
         if guard is None:
             return original_fn(*args, **kwargs)
 
-        # -- Pre-call scan ---------------------------------------------------
         guard_messages, model, context = extract_messages(args, kwargs)
 
         if guard_messages:
@@ -71,30 +120,10 @@ def wrap_sync(
                 logger.warning("Guard API unavailable, allowing request (fail_open=True)")
                 decision = None
 
-            if decision is not None:
-                if decision.blocked:
-                    if get_mode() == "enforce":
-                        raise PromptGuardBlockedError(decision)
-                    logger.warning(
-                        "[monitor] PromptGuard would block: %s (event=%s)",
-                        decision.threat_type,
-                        decision.event_id,
-                    )
+            kwargs = _handle_pre_scan_decision(decision, get_mode, apply_redaction, args, kwargs)
 
-                if decision.redacted and decision.redacted_messages:
-                    if get_mode() == "enforce" and apply_redaction:
-                        kwargs = apply_redaction(args, kwargs, decision.redacted_messages)
-                    else:
-                        logger.warning(
-                            "[monitor] PromptGuard would redact: %s (event=%s)",
-                            decision.threat_type,
-                            decision.event_id,
-                        )
-
-        # -- Original call ---------------------------------------------------
         response = original_fn(*args, **kwargs)
 
-        # -- Post-call scan --------------------------------------------------
         if should_scan_responses() and response and guard:
             try:
                 resp_text = extract_response(response)
@@ -104,8 +133,7 @@ def wrap_sync(
                         direction="output",
                         model=model,
                     )
-                    if resp_decision.blocked and get_mode() == "enforce":
-                        raise PromptGuardBlockedError(resp_decision)
+                    _handle_response_block(resp_decision, get_mode)
             except (PromptGuardBlockedError, GuardApiError):
                 raise
             except Exception:
@@ -121,19 +149,21 @@ def wrap_async(
     extract_messages: Callable[..., tuple[list[dict[str, str]], str | None, dict[str, Any]]],
     extract_response: Callable[[Any], str | None],
     apply_redaction: Callable | None = None,
+    should_intercept: Callable[..., bool] | None = None,
 ) -> Callable:
     """Async variant of ``wrap_sync``.  Same interface."""
 
     @functools.wraps(original_fn)
     async def wrapper(*args, **kwargs):
+        if should_intercept and not should_intercept(args, kwargs):
+            return await original_fn(*args, **kwargs)
+
         from promptguard.auto import get_guard_client, get_mode, is_fail_open, should_scan_responses
-        from promptguard.guard import GuardApiError, PromptGuardBlockedError
 
         guard = get_guard_client()
         if guard is None:
             return await original_fn(*args, **kwargs)
 
-        # -- Pre-call scan ---------------------------------------------------
         guard_messages, model, context = extract_messages(args, kwargs)
 
         if guard_messages:
@@ -150,30 +180,10 @@ def wrap_async(
                 logger.warning("Guard API unavailable, allowing request (fail_open=True)")
                 decision = None
 
-            if decision is not None:
-                if decision.blocked:
-                    if get_mode() == "enforce":
-                        raise PromptGuardBlockedError(decision)
-                    logger.warning(
-                        "[monitor] PromptGuard would block: %s (event=%s)",
-                        decision.threat_type,
-                        decision.event_id,
-                    )
+            kwargs = _handle_pre_scan_decision(decision, get_mode, apply_redaction, args, kwargs)
 
-                if decision.redacted and decision.redacted_messages:
-                    if get_mode() == "enforce" and apply_redaction:
-                        kwargs = apply_redaction(args, kwargs, decision.redacted_messages)
-                    else:
-                        logger.warning(
-                            "[monitor] PromptGuard would redact: %s (event=%s)",
-                            decision.threat_type,
-                            decision.event_id,
-                        )
-
-        # -- Original call ---------------------------------------------------
         response = await original_fn(*args, **kwargs)
 
-        # -- Post-call scan --------------------------------------------------
         if should_scan_responses() and response and guard:
             try:
                 resp_text = extract_response(response)
@@ -183,8 +193,7 @@ def wrap_async(
                         direction="output",
                         model=model,
                     )
-                    if resp_decision.blocked and get_mode() == "enforce":
-                        raise PromptGuardBlockedError(resp_decision)
+                    _handle_response_block(resp_decision, get_mode)
             except (PromptGuardBlockedError, GuardApiError):
                 raise
             except Exception:

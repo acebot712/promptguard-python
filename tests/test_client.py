@@ -13,12 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from promptguard._version import __version__
 from promptguard.client import (
     _SDK_LANG,
-    _SDK_VERSION,
     PromptGuard,
     PromptGuardAsync,
     PromptGuardError,
+    _sdk_headers,
 )
 from promptguard.config import Config
 
@@ -153,16 +154,16 @@ class TestAsyncClientNamespaces:
 class TestSDKHeaders:
     def test_sync_headers(self):
         c = _make_sync_client()
-        h = c._get_headers()
+        h = _sdk_headers(c.config.api_key)
         assert h["X-PromptGuard-SDK"] == _SDK_LANG
-        assert h["X-PromptGuard-Version"] == _SDK_VERSION
+        assert h["X-PromptGuard-Version"] == __version__
         assert "Bearer pg_test" in h["Authorization"]
 
     def test_async_headers(self):
         c = _make_async_client()
-        h = c._get_headers()
+        h = _sdk_headers(c.config.api_key)
         assert h["X-PromptGuard-SDK"] == _SDK_LANG
-        assert h["X-PromptGuard-Version"] == _SDK_VERSION
+        assert h["X-PromptGuard-Version"] == __version__
         assert "Bearer pg_test" in h["Authorization"]
 
 
@@ -173,22 +174,22 @@ class TestSyncRetry:
     @patch("time.sleep")
     def test_retries_on_500(self, mock_sleep):
         c = _make_sync_client()
-        c._client = MagicMock()
-        c._client.request.side_effect = [
+        c._http = MagicMock()
+        c._http.request.side_effect = [
             _err_response(500),
             _err_response(500),
             _ok_response({"result": "ok"}),
         ]
         result = c._request("POST", "/test")
         assert result == {"result": "ok"}
-        assert c._client.request.call_count == 3
+        assert c._http.request.call_count == 3
         assert mock_sleep.call_count == 2
 
     @patch("time.sleep")
     def test_retries_on_429(self, mock_sleep):
         c = _make_sync_client()
-        c._client = MagicMock()
-        c._client.request.side_effect = [
+        c._http = MagicMock()
+        c._http.request.side_effect = [
             _err_response(429),
             _ok_response(),
         ]
@@ -199,29 +200,29 @@ class TestSyncRetry:
     @patch("time.sleep")
     def test_no_retry_on_400(self, mock_sleep):
         c = _make_sync_client()
-        c._client = MagicMock()
-        c._client.request.return_value = _err_response(400)
+        c._http = MagicMock()
+        c._http.request.return_value = _err_response(400)
         with pytest.raises(PromptGuardError) as exc:
             c._request("POST", "/test")
         assert exc.value.status_code == 400
-        assert c._client.request.call_count == 1
+        assert c._http.request.call_count == 1
         mock_sleep.assert_not_called()
 
     @patch("time.sleep")
     def test_exhausts_retries(self, mock_sleep):
         cfg = Config(api_key="pg_test", max_retries=2)
         c = PromptGuard(config=cfg)
-        c._client = MagicMock()
-        c._client.request.return_value = _err_response(503)
+        c._http = MagicMock()
+        c._http.request.return_value = _err_response(503)
         with pytest.raises(PromptGuardError):
             c._request("POST", "/test")
-        assert c._client.request.call_count == 3  # initial + 2 retries
+        assert c._http.request.call_count == 3  # initial + 2 retries
 
     @patch("time.sleep")
     def test_retries_on_transport_error(self, mock_sleep):
         c = _make_sync_client()
-        c._client = MagicMock()
-        c._client.request.side_effect = [
+        c._http = MagicMock()
+        c._http.request.side_effect = [
             httpx.ConnectError("refused"),
             _ok_response({"recovered": True}),
         ]
@@ -232,8 +233,8 @@ class TestSyncRetry:
     def test_exponential_backoff(self, mock_sleep):
         cfg = Config(api_key="pg_test", max_retries=3, retry_delay=1.0)
         c = PromptGuard(config=cfg)
-        c._client = MagicMock()
-        c._client.request.side_effect = [
+        c._http = MagicMock()
+        c._http.request.side_effect = [
             _err_response(500),
             _err_response(500),
             _err_response(500),
