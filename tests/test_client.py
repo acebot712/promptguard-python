@@ -157,14 +157,14 @@ class TestSDKHeaders:
         h = _sdk_headers(c.config.api_key)
         assert h["X-PromptGuard-SDK"] == _SDK_LANG
         assert h["X-PromptGuard-Version"] == __version__
-        assert "Bearer pg_test" in h["Authorization"]
+        assert h["X-API-Key"] == c.config.api_key
 
     def test_async_headers(self):
         c = _make_async_client()
         h = _sdk_headers(c.config.api_key)
         assert h["X-PromptGuard-SDK"] == _SDK_LANG
         assert h["X-PromptGuard-Version"] == __version__
-        assert "Bearer pg_test" in h["Authorization"]
+        assert h["X-API-Key"] == c.config.api_key
 
 
 # ── Retry logic (sync) ───────────────────────────────────────────────
@@ -317,3 +317,41 @@ class TestValidation:
     def test_async_requires_api_key(self):
         with pytest.raises(ValueError, match="API key"):
             PromptGuardAsync(api_key="")
+
+
+# ── Quota error parsing ──────────────────────────────────────────────
+
+
+def _quota_response():
+    return httpx.Response(
+        status_code=429,
+        json={
+            "error": {
+                "message": "Monthly quota of 10,000 requests exceeded.",
+                "type": "quota_exceeded",
+                "code": "monthly_quota_exceeded",
+                "current_plan": "free",
+                "requests_used": 10000,
+                "requests_limit": 10000,
+                "upgrade_url": "https://app.promptguard.co/billing",
+            }
+        },
+        request=httpx.Request("POST", "http://test"),
+    )
+
+
+class TestQuotaErrorParsing:
+    @patch("time.sleep")
+    def test_quota_error_includes_upgrade_url(self, mock_sleep):
+        c = _make_sync_client()
+        c._http = MagicMock()
+        c._http.request.return_value = _quota_response()
+        with pytest.raises(PromptGuardError) as exc:
+            c._request("POST", "/test")
+        assert exc.value.status_code == 429
+        assert exc.value.code == "monthly_quota_exceeded"
+        assert exc.value.error_type == "quota_exceeded"
+        assert exc.value.upgrade_url == "https://app.promptguard.co/billing"
+        assert exc.value.current_plan == "free"
+        assert exc.value.requests_used == 10000
+        assert exc.value.requests_limit == 10000

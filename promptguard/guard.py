@@ -97,7 +97,7 @@ class GuardClient:
 
     def _get_headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._api_key}",
+            "X-API-Key": self._api_key,
             "Content-Type": "application/json",
             "X-PromptGuard-SDK": "python-auto",
             "X-PromptGuard-Version": __version__,

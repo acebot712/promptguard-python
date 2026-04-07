@@ -127,7 +127,7 @@ class TestGuardClient:
     def test_headers(self):
         client = GuardClient(api_key="pg_test_key")
         headers = client._get_headers()
-        assert headers["Authorization"] == "Bearer pg_test_key"
+        assert headers["X-API-Key"] == "pg_test_key"
         assert headers["Content-Type"] == "application/json"
         assert "X-PromptGuard-SDK" in headers
 

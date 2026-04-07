@@ -24,10 +24,26 @@ _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 class PromptGuardError(Exception):
     """Error from PromptGuard API"""
 
-    def __init__(self, message: str, code: str, status_code: int):
+    def __init__(
+        self,
+        message: str,
+        code: str,
+        status_code: int,
+        *,
+        error_type: str | None = None,
+        upgrade_url: str | None = None,
+        current_plan: str | None = None,
+        requests_used: int | None = None,
+        requests_limit: int | None = None,
+    ):
         self.message = message
         self.code = code
         self.status_code = status_code
+        self.error_type = error_type
+        self.upgrade_url = upgrade_url
+        self.current_plan = current_plan
+        self.requests_used = requests_used
+        self.requests_limit = requests_limit
         super().__init__(f"{code}: {message}")
 
 
@@ -36,7 +52,7 @@ class PromptGuardError(Exception):
 
 def _sdk_headers(api_key: str) -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {api_key}",
+        "X-API-Key": api_key,
         "Content-Type": "application/json",
         "X-PromptGuard-SDK": _SDK_LANG,
         "X-PromptGuard-Version": __version__,
@@ -48,10 +64,16 @@ def _parse_error(response: httpx.Response) -> PromptGuardError:
         data = response.json() if response.content else {}
     except (json.JSONDecodeError, ValueError):
         data = {}
+    err = data.get("error", {})
     return PromptGuardError(
-        message=data.get("error", {}).get("message", "Request failed"),
-        code=data.get("error", {}).get("code", "UNKNOWN"),
+        message=err.get("message", "Request failed"),
+        code=err.get("code", "UNKNOWN"),
         status_code=response.status_code,
+        error_type=err.get("type"),
+        upgrade_url=err.get("upgrade_url"),
+        current_plan=err.get("current_plan"),
+        requests_used=err.get("requests_used"),
+        requests_limit=err.get("requests_limit"),
     )
 
 
