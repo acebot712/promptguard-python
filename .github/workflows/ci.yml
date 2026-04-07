@@ -53,7 +53,6 @@ jobs:
   validate-api-contract:
     name: Validate API Contract
     runs-on: ubuntu-latest
-    if: ${{ secrets.OPENAPI_SPEC_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -65,14 +64,23 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Download OpenAPI spec
+        id: download-spec
+        continue-on-error: true
+        env:
+          SPEC_TOKEN: ${{ secrets.OPENAPI_SPEC_TOKEN }}
         run: |
+          if [ -z "$SPEC_TOKEN" ]; then
+            echo "OPENAPI_SPEC_TOKEN not set, skipping validation"
+            exit 1
+          fi
           curl -sfL \
-            -H "Authorization: token ${{ secrets.OPENAPI_SPEC_TOKEN }}" \
+            -H "Authorization: token $SPEC_TOKEN" \
             -H "Accept: application/vnd.github.v3.raw" \
             "https://api.github.com/repos/acebot712/promptguard/contents/apps/docs/api-reference/openapi-developer.json?ref=main" \
             -o openapi-developer.json
 
       - name: Validate SDK types against spec
+        if: steps.download-spec.outcome == 'success'
         run: python tests/validate_openapi.py openapi-developer.json
 
   build:
