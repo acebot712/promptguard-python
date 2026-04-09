@@ -41,7 +41,7 @@ class TestLangChainCallbackHandler:
 
         handler = self._make_handler()
         handler.on_llm_start(
-            serialized={"id": ["ChatOpenAI"], "kwargs": {"model_name": "gpt-4o"}},
+            serialized={"id": ["ChatOpenAI"], "kwargs": {"model_name": "gpt-5-nano"}},
             prompts=["Hello world"],
         )
         mock_scan.assert_called_once()
@@ -251,7 +251,7 @@ class TestLlamaIndexCallbackHandler:
             event_type="llm",
             payload={
                 "messages": [{"role": "user", "content": "Hello"}],
-                "model_name": "gpt-4",
+                "model_name": "gpt-5-nano",
             },
             event_id="evt-1",
         )

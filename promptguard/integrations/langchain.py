@@ -12,7 +12,7 @@ Usage::
     handler = PromptGuardCallbackHandler(api_key="pg_xxx")
 
     # Attach to a single LLM
-    llm = ChatOpenAI(model="gpt-4o", callbacks=[handler])
+    llm = ChatOpenAI(model="gpt-5-nano", callbacks=[handler])
 
     # Or use globally with any chain / agent
     chain.invoke({"input": "..."}, config={"callbacks": [handler]})

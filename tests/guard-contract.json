@@ -219,13 +219,13 @@
         "args": {
           "messages": [{ "role": "user", "content": "Hi" }],
           "direction": "output",
-          "model": "gpt-4o",
+          "model": "gpt-5-nano",
           "context": { "framework": "langchain" }
         },
         "expect": {
           "messages": [{ "role": "user", "content": "Hi" }],
           "direction": "output",
-          "model": "gpt-4o",
+          "model": "gpt-5-nano",
           "context": { "framework": "langchain" }
         }
       }

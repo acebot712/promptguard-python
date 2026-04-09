@@ -29,7 +29,7 @@ promptguard.init(api_key="pg_xxx")
 from openai import OpenAI
 client = OpenAI()
 response = client.chat.completions.create(
-    model="gpt-4o",
+    model="gpt-5-nano",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 # ^^ Scanned by PromptGuard before reaching OpenAI
@@ -96,7 +96,7 @@ handler = PromptGuardCallbackHandler(api_key="pg_xxx")
 
 # Attach to an LLM
 from langchain_openai import ChatOpenAI
-llm = ChatOpenAI(model="gpt-4o", callbacks=[handler])
+llm = ChatOpenAI(model="gpt-5-nano", callbacks=[handler])
 
 # Or use globally with any chain
 chain.invoke({"input": "..."}, config={"callbacks": [handler]})
@@ -167,7 +167,7 @@ guard = GuardClient(api_key="pg_xxx")
 decision = guard.scan(
     messages=[{"role": "user", "content": "Hello!"}],
     direction="input",
-    model="gpt-4o",
+    model="gpt-5-nano",
 )
 
 if decision.blocked:
@@ -189,7 +189,7 @@ curl -X POST https://api.promptguard.co/api/v1/guard \
   -d '{
     "messages": [{"role": "user", "content": "Hello!"}],
     "direction": "input",
-    "model": "gpt-4o"
+    "model": "gpt-5-nano"
   }'
 ```
 
@@ -252,7 +252,7 @@ from promptguard import PromptGuardAsync
 
 async with PromptGuardAsync(api_key="pg_xxx") as pg:
     response = await pg.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=[{"role": "user", "content": "Hello!"}]
     )
 

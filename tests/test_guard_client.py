@@ -117,10 +117,10 @@ class TestGuardClient:
         payload = GuardClient._build_payload(
             messages=[{"role": "user", "content": "Hello"}],
             direction="output",
-            model="gpt-4o",
+            model="gpt-5-nano",
             context={"framework": "langchain"},
         )
-        assert payload["model"] == "gpt-4o"
+        assert payload["model"] == "gpt-5-nano"
         assert payload["context"]["framework"] == "langchain"
         assert payload["direction"] == "output"
 

@@ -10,7 +10,7 @@ Usage (proxy mode - existing):
 
     pg = PromptGuard(api_key="pg_xxx")
     response = pg.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=[{"role": "user", "content": "Hello!"}]
     )
 
