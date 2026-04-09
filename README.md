@@ -1,3 +1,8 @@
+[![PyPI version](https://img.shields.io/pypi/v/promptguard-sdk)](https://pypi.org/project/promptguard-sdk/)
+[![CI](https://github.com/acebot712/promptguard-python/actions/workflows/ci.yml/badge.svg)](https://github.com/acebot712/promptguard-python/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/acebot712/promptguard-python)](https://github.com/acebot712/promptguard-python/blob/main/LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/promptguard-sdk)](https://pypi.org/project/promptguard-sdk/)
+
 # PromptGuard Python SDK
 
 Drop-in security for AI applications. No code changes required.
