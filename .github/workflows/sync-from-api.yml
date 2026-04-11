@@ -1,0 +1,79 @@
+name: Sync Types from API Spec
+
+on:
+  repository_dispatch:
+    types: [openapi-spec-updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-types:
+    name: Generate Types from OpenAPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Download latest OpenAPI spec
+        env:
+          SPEC_TOKEN: ${{ secrets.OPENAPI_SPEC_TOKEN }}
+        run: |
+          curl -sfL \
+            -H "Authorization: token $SPEC_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/acebot712/promptguard/contents/apps/docs/api-reference/openapi-developer.json?ref=main" \
+            -o openapi-developer.json
+
+      - name: Generate types
+        run: python scripts/generate_types_from_spec.py openapi-developer.json
+
+      - name: Validate SDK still passes
+        run: |
+          ruff check .
+          pytest tests/ -v
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet promptguard/generated/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="auto/sync-api-types-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          git add promptguard/generated/
+          git commit -m "chore: sync generated types from API spec"
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: sync generated API types" \
+            --body "$(cat <<'EOF'
+          ## Auto-generated from OpenAPI spec
+
+          Updated `promptguard/generated/api_types.py` from the latest API spec.
+
+          **What changed**: Type definitions only (TypedDicts). No client code,
+          patches, or integrations were modified.
+
+          **What to check**: If new types were added, consider importing them in
+          hand-written code where useful. All existing tests pass.
+
+          Triggered by: ${{ github.event.client_payload.sha || 'manual dispatch' }}
+          EOF
+          )"
