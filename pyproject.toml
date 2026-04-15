@@ -121,6 +121,7 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 source = ["promptguard"]
+omit = ["promptguard/generated/*"]
 
 [tool.coverage.report]
 fail_under = 50
