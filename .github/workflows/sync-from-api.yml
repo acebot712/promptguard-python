@@ -77,7 +77,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
 
-          BRANCH="auto/sync-api-types-$(date +%Y%m%d)"
+          # Unique branch per run avoids collisions when the daily
+          # sync branch already exists from a prior failed run.
+          BRANCH="auto/sync-api-types-${{ github.run_id }}"
           git checkout -b "$BRANCH"
           git add promptguard/generated/
           git commit -m "chore: sync generated types from API spec"
