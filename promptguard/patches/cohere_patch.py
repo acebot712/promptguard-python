@@ -77,7 +77,8 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
 def _extract_response_text(response: Any) -> str | None:
     try:
         if hasattr(response, "text"):
-            return response.text
+            text: str | None = response.text
+            return text
         if hasattr(response, "message") and hasattr(response.message, "content"):
             parts = response.message.content
             if isinstance(parts, list):
@@ -85,7 +86,8 @@ def _extract_response_text(response: Any) -> str | None:
                 return "\n".join(texts) if texts else None
             return str(parts) if parts else None
         if isinstance(response, dict):
-            return response.get("text", response.get("message", {}).get("content"))
+            dict_text: str | None = response.get("text", response.get("message", {}).get("content"))
+            return dict_text
     except Exception:
         logger.debug("Failed to extract Cohere response text", exc_info=True)
     return None

@@ -28,7 +28,7 @@ _patched = False
 
 def _messages_to_guard_format(messages: Any) -> list[dict[str, str]]:
     """Convert OpenAI-style messages to the guard API format."""
-    result = []
+    result: list[dict[str, str]] = []
     if not messages:
         return result
     for msg in messages:
@@ -68,8 +68,9 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
     """Apply redacted content back into kwargs."""
     messages = kwargs.get("messages") or (args[1] if len(args) > 1 else None)
     if not messages or not redacted:
-        return kwargs
-    result = []
+        new_kwargs: dict = dict(kwargs)
+        return new_kwargs
+    result: list = []
     for i, msg in enumerate(messages):
         if i < len(redacted):
             if isinstance(msg, dict):
@@ -80,9 +81,9 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
                 result.append(msg)
         else:
             result.append(msg)
-    kwargs = dict(kwargs)
-    kwargs["messages"] = result
-    return kwargs
+    new_kwargs = dict(kwargs)
+    new_kwargs["messages"] = result
+    return new_kwargs
 
 
 def _extract_response_content(response: Any) -> str | None:
@@ -91,11 +92,13 @@ def _extract_response_content(response: Any) -> str | None:
         if hasattr(response, "choices") and response.choices:
             choice = response.choices[0]
             if hasattr(choice, "message") and hasattr(choice.message, "content"):
-                return choice.message.content
+                content: str | None = choice.message.content
+                return content
         if isinstance(response, dict):
             choices = response.get("choices", [])
             if choices:
-                return choices[0].get("message", {}).get("content")
+                msg_content: str | None = choices[0].get("message", {}).get("content")
+                return msg_content
     except Exception:
         logger.debug("Failed to extract OpenAI response text", exc_info=True)
     return None

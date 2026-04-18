@@ -368,7 +368,8 @@ class PromptGuard:
             if response.status_code >= 400:
                 raise _parse_error(response)
 
-            return response.json()
+            data: dict[str, Any] = response.json()
+            return data
 
         if last_exc:
             raise last_exc
@@ -658,7 +659,8 @@ class PromptGuardAsync:
             if response.status_code >= 400:
                 raise _parse_error(response)
 
-            return response.json()
+            data: dict[str, Any] = response.json()
+            return data
 
         if last_exc:
             raise last_exc

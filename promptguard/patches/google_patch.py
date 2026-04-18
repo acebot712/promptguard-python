@@ -96,10 +96,12 @@ def _extract_messages(
 def _extract_response_text(response: Any) -> str | None:
     try:
         if hasattr(response, "text"):
-            return response.text
+            text: str | None = response.text
+            return text
         if hasattr(response, "candidates") and response.candidates:
             parts = response.candidates[0].content.parts
-            return _extract_text_from_parts(parts)
+            from_parts: str | None = _extract_text_from_parts(parts)
+            return from_parts
     except Exception:
         logger.debug("Failed to extract Google response text", exc_info=True)
     return None

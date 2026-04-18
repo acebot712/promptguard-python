@@ -50,7 +50,8 @@ def _handle_pre_scan_decision(
 
     if decision.redacted and decision.redacted_messages:
         if get_mode() == "enforce" and apply_redaction:
-            return apply_redaction(args, kwargs, decision.redacted_messages)
+            redacted: dict = apply_redaction(args, kwargs, decision.redacted_messages)
+            return redacted
         logger.warning(
             "[monitor] PromptGuard would redact: %s (event=%s)",
             decision.threat_type,

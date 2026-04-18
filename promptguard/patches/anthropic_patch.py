@@ -79,17 +79,17 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
 
 
 def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
-    kwargs = dict(kwargs)
-    system = kwargs.get("system")
-    messages = kwargs.get("messages")
+    new_kwargs: dict = dict(kwargs)
+    system = new_kwargs.get("system")
+    messages = new_kwargs.get("messages")
     has_system = system is not None
     offset = 1 if has_system else 0
 
     if has_system and redacted:
-        kwargs["system"] = redacted[0]["content"]
+        new_kwargs["system"] = redacted[0]["content"]
 
     if messages and redacted:
-        result = []
+        result: list = []
         for i, msg in enumerate(messages):
             idx = i + offset
             if idx < len(redacted):
@@ -101,9 +101,9 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
                     result.append(msg)
             else:
                 result.append(msg)
-        kwargs["messages"] = result
+        new_kwargs["messages"] = result
 
-    return kwargs
+    return new_kwargs
 
 
 def _extract_response_content(response: Any) -> str | None:
