@@ -1,8 +1,13 @@
 name: Sync Types from API Spec
 
 on:
-  repository_dispatch:
-    types: [openapi-spec-updated]
+  # Weekly check for spec drift. The OpenAPI spec is published publicly
+  # at https://docs.promptguard.co/api-reference/openapi-developer.json
+  # so we don't need a cross-repo dispatch from the monorepo (which
+  # required a fine-grained PAT we never set up). Pull-based, no auth,
+  # no token-rotation surface, runs on the public Actions tier.
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays 06:00 UTC
   workflow_dispatch:
 
 # Workflow-level: minimal. Job-level escalates to write where needed.
@@ -36,14 +41,13 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Download latest OpenAPI spec
-        env:
-          SPEC_TOKEN: ${{ secrets.OPENAPI_SPEC_TOKEN }}
         run: |
-          curl -sfL \
-            -H "Authorization: token $SPEC_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/acebot712/promptguard/contents/apps/docs/api-reference/openapi-developer.json?ref=main" \
-            -o openapi-developer.json
+          # Public docs URL serves the same file the monorepo generates.
+          # No auth, no rate-limit cliff. ``--retry`` covers a transient
+          # CDN hiccup; ``--fail`` makes a non-2xx exit nonzero.
+          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
+            -o openapi-developer.json \
+            "https://docs.promptguard.co/api-reference/openapi-developer.json"
 
       - name: Generate types
         run: python scripts/generate_types_from_spec.py openapi-developer.json
@@ -86,6 +90,6 @@ jobs:
           **What to check**: If new types were added, consider importing them in
           hand-written code where useful. All existing tests pass.
 
-          Triggered by: ${{ github.event.client_payload.sha || 'manual dispatch' }}
+          Triggered by: ${{ github.event_name }} at ${{ github.run_id }}
           EOF
           )"
