@@ -5,20 +5,31 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Default to read-only. id-token: write is escalated only on the
+# publish job that actually needs PyPI Trusted Publishing OIDC.
 permissions:
-  id-token: write
   contents: read
+
+# Only one publish at a time -- never two concurrent publishes of
+# the same version. Don't cancel in progress: a half-rolled-back
+# publish is worse than two queued.
+concurrency:
+  group: release-pypi
+  cancel-in-progress: false
 
 jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
 
       - name: Lint
         run: |
@@ -39,13 +50,21 @@ jobs:
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: validate
+    # PyPI Trusted Publishing needs id-token: write to mint the OIDC
+    # token. contents: read is for checkout. Nothing else escalates.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
 
       - name: Get version
         id: version

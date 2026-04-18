@@ -5,20 +5,32 @@ on:
     types: [openapi-spec-updated]
   workflow_dispatch:
 
+# Workflow-level: minimal. Job-level escalates to write where needed.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+# Only one sync at a time -- two parallel runs would race on the
+# branch + PR creation.
+concurrency:
+  group: sync-types
+  cancel-in-progress: false
 
 jobs:
   sync-types:
     name: Generate Types from OpenAPI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
