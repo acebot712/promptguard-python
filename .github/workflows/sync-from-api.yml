@@ -71,6 +71,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The bot commit needs an identity. Use the standard
+          # github-actions[bot] identity; PRs land authored by the bot
+          # which is the right signal in the audit log.
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
           BRANCH="auto/sync-api-types-$(date +%Y%m%d)"
           git checkout -b "$BRANCH"
           git add promptguard/generated/
