@@ -225,14 +225,16 @@ class PromptGuardCallbackHandler:
             if isinstance(response, str):
                 return response
             if hasattr(response, "text"):
-                return response.text
+                resp_text: str | None = response.text
+                return resp_text
             if hasattr(response, "message") and hasattr(response.message, "content"):
                 return str(response.message.content)
             return str(response)
 
         raw = payload.get("raw")
         if raw and hasattr(raw, "text"):
-            return raw.text
+            raw_text: str | None = raw.text
+            return raw_text
 
         return None
 
