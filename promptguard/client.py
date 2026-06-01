@@ -10,7 +10,8 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, TypedDict
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -47,6 +48,21 @@ class PromptGuardError(Exception):
         super().__init__(f"{code}: {message}")
 
 
+class SecurityScanResult(TypedDict, total=False):
+    """Result of a ``security.scan`` call.
+
+    Mirrors the Node SDK's ``SecurityScanResult`` so the documented keys are
+    discoverable.  Declared ``total=False`` because the API only includes
+    threat metadata when something is detected.
+    """
+
+    blocked: bool
+    decision: str  # "allow" | "block" | "redact"
+    reason: str
+    threat_type: str
+    confidence: float
+
+
 # -- Shared helpers used by both sync and async clients ----------------------
 
 
@@ -77,18 +93,51 @@ def _parse_error(response: httpx.Response) -> PromptGuardError:
     )
 
 
+_DEFAULT_PROXY_BASE_URL = "https://api.promptguard.co/api/v1/proxy"
+
+
+def _ensure_proxy_suffix(base_url: str) -> str:
+    """Ensure the proxy base URL's path ends with ``/proxy``.
+
+    The proxy endpoints live under ``/api/v1/proxy``.  Users frequently set
+    ``PROMPTGUARD_BASE_URL`` (or pass ``base_url=``) to ``.../api/v1`` without
+    the ``/proxy`` suffix, which would route proxy requests to the wrong path.
+    Append it when missing so requests always land on the proxy.
+
+    Uses proper URL parsing so a trailing slash, query string, or fragment is
+    handled correctly and the scheme/host/port/query/fragment are preserved.
+    """
+    parts = urlsplit(base_url)
+    # Strip a single trailing slash from the path so we operate on segments.
+    path = parts.path[:-1] if parts.path.endswith("/") else parts.path
+    # Append /proxy only when the last path segment isn't already "proxy".
+    last_segment = path.rsplit("/", 1)[-1]
+    if last_segment != "proxy":
+        path = f"{path}/proxy"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
 def _init_config(
     api_key: str | None,
     base_url: str | None,
     config: Config | None,
+    max_retries: int | None = None,
+    retry_delay: float | None = None,
 ) -> Config:
     if config:
         return config
-    return Config(
+    resolved_base = base_url or os.environ.get("PROMPTGUARD_BASE_URL", _DEFAULT_PROXY_BASE_URL)
+    cfg = Config(
         api_key=api_key or os.environ.get("PROMPTGUARD_API_KEY", ""),
-        base_url=base_url
-        or os.environ.get("PROMPTGUARD_BASE_URL", "https://api.promptguard.co/api/v1/proxy"),
+        base_url=_ensure_proxy_suffix(resolved_base),
     )
+    if max_retries is not None:
+        # Clamp to >= 0 so a negative value can never collapse the request loop
+        # to zero attempts (which would silently skip the security scan).
+        cfg.max_retries = max(0, max_retries)
+    if retry_delay is not None:
+        cfg.retry_delay = max(0.0, retry_delay)
+    return cfg
 
 
 # ── Sync Namespace Classes ─────────────────────────────────────────────────
@@ -186,8 +235,8 @@ class Security:
     def __init__(self, client: "PromptGuard"):
         self._client = client
 
-    def scan(self, content: str, content_type: str = "prompt") -> dict[str, Any]:
-        return self._client._request(
+    def scan(self, content: str, content_type: str = "prompt") -> "SecurityScanResult":
+        return self._client._request(  # type: ignore[return-value]
             "POST",
             "/security/scan",
             json={"content": content, "type": content_type},
@@ -313,7 +362,7 @@ class PromptGuard:
 
         from promptguard import PromptGuard
 
-        pg = PromptGuard(api_key="pg_xxx")
+        pg = PromptGuard(api_key="pg_live_xxx")
         response = pg.chat.completions.create(
             model="gpt-5-nano",
             messages=[{"role": "user", "content": "Hello!"}],
@@ -327,12 +376,15 @@ class PromptGuard:
         base_url: str | None = None,
         config: Config | None = None,
         timeout: float = 30.0,
+        max_retries: int | None = None,
+        retry_delay: float | None = None,
     ):
-        self.config = _init_config(api_key, base_url, config)
+        self.config = _init_config(api_key, base_url, config, max_retries, retry_delay)
         if not self.config.api_key:
             raise ValueError(
-                "API key required. Pass api_key parameter or set "
-                "PROMPTGUARD_API_KEY environment variable."
+                "API key required. Pass api_key parameter or set the "
+                "PROMPTGUARD_API_KEY environment variable. "
+                "Get a key at https://app.promptguard.co"
             )
         self._http = httpx.Client(timeout=timeout)
         self.chat = Chat(self)
@@ -481,8 +533,8 @@ class AsyncSecurity:
     def __init__(self, client: "PromptGuardAsync"):
         self._client = client
 
-    async def scan(self, content: str, content_type: str = "prompt") -> dict[str, Any]:
-        return await self._client._request(
+    async def scan(self, content: str, content_type: str = "prompt") -> "SecurityScanResult":
+        return await self._client._request(  # type: ignore[return-value]
             "POST",
             "/security/scan",
             json={"content": content, "type": content_type},
@@ -606,7 +658,7 @@ class PromptGuardAsync:
 
     Usage::
 
-        async with PromptGuardAsync(api_key="pg_xxx") as pg:
+        async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
             resp = await pg.chat.completions.create(
                 model="gpt-5-nano",
                 messages=[{"role": "user", "content": "Hi"}],
@@ -619,11 +671,15 @@ class PromptGuardAsync:
         base_url: str | None = None,
         config: Config | None = None,
         timeout: float = 30.0,
+        max_retries: int | None = None,
+        retry_delay: float | None = None,
     ):
-        self.config = _init_config(api_key, base_url, config)
+        self.config = _init_config(api_key, base_url, config, max_retries, retry_delay)
         if not self.config.api_key:
             raise ValueError(
-                "API key required. Pass api_key or set PROMPTGUARD_API_KEY environment variable."
+                "API key required. Pass api_key parameter or set the "
+                "PROMPTGUARD_API_KEY environment variable. "
+                "Get a key at https://app.promptguard.co"
             )
         self._http = httpx.AsyncClient(timeout=timeout)
         self.chat = AsyncChat(self)

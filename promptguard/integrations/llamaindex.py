@@ -9,7 +9,7 @@ Usage::
     from promptguard.integrations.llamaindex import PromptGuardCallbackHandler
     from llama_index.core.callbacks import CallbackManager
 
-    pg_handler = PromptGuardCallbackHandler(api_key="pg_xxx")
+    pg_handler = PromptGuardCallbackHandler(api_key="pg_live_xxx")
     callback_manager = CallbackManager([pg_handler])
 
     from llama_index.core import Settings

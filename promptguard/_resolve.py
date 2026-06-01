@@ -17,8 +17,9 @@ def resolve_credentials(
     key = api_key or os.environ.get("PROMPTGUARD_API_KEY", "")
     if not key:
         raise ValueError(
-            "PromptGuard API key required. Pass api_key= or set the "
-            "PROMPTGUARD_API_KEY environment variable."
+            "API key required. Pass api_key parameter or set the "
+            "PROMPTGUARD_API_KEY environment variable. "
+            "Get a key at https://app.promptguard.co"
         )
     url = base_url or os.environ.get("PROMPTGUARD_BASE_URL") or default_base_url
     return key, url
