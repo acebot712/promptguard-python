@@ -14,12 +14,14 @@ from typing import Any, TypedDict
 
 """Request to register a new agent identity."""
 
+
 class AgentRegisterRequest(TypedDict, total=False):
     agent_name: str
     allowed_tools: list[str] | Any
 
 
 """Response from agent registration — secret is shown only once."""
+
 
 class AgentRegisterResponse(TypedDict):
     agent_id: str
@@ -30,6 +32,7 @@ class AgentRegisterResponse(TypedDict):
 
 """Response from credential rotation."""
 
+
 class AgentRotateResponse(TypedDict):
     agent_id: str
     new_secret: str
@@ -38,6 +41,7 @@ class AgentRotateResponse(TypedDict):
 
 
 """Statistics for an agent"""
+
 
 class AgentStats(TypedDict):
     agent_id: str
@@ -49,6 +53,7 @@ class AgentStats(TypedDict):
 
 
 """Response containing the full API key for copy functionality"""
+
 
 class ApiKeyFullResponse(TypedDict):
     id: str
@@ -76,6 +81,7 @@ class AuthErrorEnvelope(TypedDict):
 
 
 """Request to run the autonomous red team agent."""
+
 
 class AutonomousRequest(TypedDict, total=False):
     budget: int
@@ -109,6 +115,7 @@ class ErrorDetail(TypedDict):
 
 """Optional rich context from framework integrations."""
 
+
 class GuardContext(TypedDict, total=False):
     # Framework name, e.g. 'langchain', 'crewai'
     framework: str | Any
@@ -126,6 +133,7 @@ class GuardContext(TypedDict, total=False):
 
 """A single message in the conversation."""
 
+
 class GuardMessage(TypedDict, total=False):
     # Message role: system, user, assistant, tool
     role: str
@@ -134,6 +142,7 @@ class GuardMessage(TypedDict, total=False):
 
 
 """Request body for the guard endpoint."""
+
 
 class GuardRequest(TypedDict, total=False):
     # Messages to scan (OpenAI-style message array)
@@ -147,6 +156,7 @@ class GuardRequest(TypedDict, total=False):
 
 
 """Response from the guard endpoint."""
+
 
 class GuardResponse(TypedDict, total=False):
     # Policy decision: 'allow', 'block', or 'redact'
@@ -218,6 +228,7 @@ class ScanResponse(TypedDict, total=False):
 
 """Individual threat found during scanning."""
 
+
 class ThreatDetail(TypedDict):
     type: str
     confidence: float
@@ -234,6 +245,7 @@ class ValidationError(TypedDict, total=False):
 
 """Request to validate a tool call"""
 
+
 class developer__agent__router__ToolCallRequest(TypedDict, total=False):
     agent_id: str
     tool_name: str
@@ -242,6 +254,7 @@ class developer__agent__router__ToolCallRequest(TypedDict, total=False):
 
 
 """Response from tool call validation"""
+
 
 class developer__agent__router__ToolCallResponse(TypedDict, total=False):
     allowed: bool
@@ -273,12 +286,14 @@ class developer__projects__schemas__ProjectResponse(TypedDict, total=False):
 
 """Request to run a red team test"""
 
+
 class internal__redteam__router__TestRequest(TypedDict, total=False):
     custom_prompt: str | Any
     target_preset: str
 
 
 """Response from a red team test"""
+
 
 class internal__redteam__router__TestResponse(TypedDict):
     test_name: str
@@ -293,10 +308,10 @@ class internal__redteam__router__TestResponse(TypedDict):
 
 """Summary of all red team tests"""
 
+
 class internal__redteam__router__TestSummary(TypedDict):
     total_tests: int
     blocked: int
     allowed: int
     block_rate: float
     results: list[internal__redteam__router__TestResponse]
-
