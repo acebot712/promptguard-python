@@ -9,7 +9,7 @@ Usage::
 
     from promptguard.integrations.langchain import PromptGuardCallbackHandler
 
-    handler = PromptGuardCallbackHandler(api_key="pg_xxx")
+    handler = PromptGuardCallbackHandler(api_key="pg_live_xxx")
 
     # Attach to a single LLM
     llm = ChatOpenAI(model="gpt-5-nano", callbacks=[handler])

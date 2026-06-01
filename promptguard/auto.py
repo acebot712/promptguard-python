@@ -8,7 +8,7 @@ framework (LangChain, CrewAI, AutoGen, LlamaIndex, …) sits on top.
 Usage::
 
     import promptguard
-    promptguard.init(api_key="pg_xxx")  # or set PROMPTGUARD_API_KEY env var
+    promptguard.init(api_key="pg_live_xxx")  # or set PROMPTGUARD_API_KEY env var
 
     # Everything below is now secured transparently.
     from openai import OpenAI
@@ -67,7 +67,7 @@ def init(
     resolved_key, resolved_url = resolve_credentials(api_key, base_url)
 
     if mode not in ("enforce", "monitor"):
-        raise ValueError("mode must be 'enforce' or 'monitor'")
+        raise ValueError(f"mode must be 'enforce' or 'monitor', got {mode!r}")
 
     _guard_client = GuardClient(
         api_key=resolved_key,

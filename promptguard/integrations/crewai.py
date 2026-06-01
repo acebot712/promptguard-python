@@ -6,7 +6,7 @@ Usage::
     from crewai import Crew
     from promptguard.integrations.crewai import PromptGuardGuardrail
 
-    pg = PromptGuardGuardrail(api_key="pg_xxx")
+    pg = PromptGuardGuardrail(api_key="pg_live_xxx")
 
     crew = Crew(
         agents=[...],
@@ -18,7 +18,7 @@ Usage::
     # Or wrap individual tools:
     from promptguard.integrations.crewai import secure_tool
 
-    @secure_tool(api_key="pg_xxx")
+    @secure_tool(api_key="pg_live_xxx")
     class MyTool(BaseTool):
         ...
 """

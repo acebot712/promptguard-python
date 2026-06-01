@@ -19,6 +19,7 @@ from promptguard.client import (
     PromptGuard,
     PromptGuardAsync,
     PromptGuardError,
+    _ensure_proxy_suffix,
     _sdk_headers,
 )
 from promptguard.config import Config
@@ -338,6 +339,78 @@ def _quota_response():
         },
         request=httpx.Request("POST", "http://test"),
     )
+
+
+# ── Proxy base-URL suffix logic ──────────────────────────────────────
+
+
+class TestEnsureProxySuffix:
+    @pytest.mark.parametrize(
+        ("base_url", "expected"),
+        [
+            # Appends /proxy when missing.
+            (
+                "https://api.promptguard.co/api/v1",
+                "https://api.promptguard.co/api/v1/proxy",
+            ),
+            # Trailing slash is stripped before appending.
+            (
+                "https://api.promptguard.co/api/v1/",
+                "https://api.promptguard.co/api/v1/proxy",
+            ),
+            # Already suffixed -> unchanged.
+            (
+                "https://api.promptguard.co/api/v1/proxy",
+                "https://api.promptguard.co/api/v1/proxy",
+            ),
+            # Already suffixed with trailing slash -> normalized.
+            (
+                "https://api.promptguard.co/api/v1/proxy/",
+                "https://api.promptguard.co/api/v1/proxy",
+            ),
+            # Host with explicit port is preserved.
+            (
+                "http://localhost:8080/api/v1",
+                "http://localhost:8080/api/v1/proxy",
+            ),
+        ],
+    )
+    def test_examples(self, base_url, expected):
+        assert _ensure_proxy_suffix(base_url) == expected
+
+    def test_preserves_query_string(self):
+        assert (
+            _ensure_proxy_suffix("https://api.promptguard.co/api/v1?foo=bar")
+            == "https://api.promptguard.co/api/v1/proxy?foo=bar"
+        )
+
+    def test_preserves_query_string_with_trailing_slash(self):
+        assert (
+            _ensure_proxy_suffix("https://api.promptguard.co/api/v1/?foo=bar")
+            == "https://api.promptguard.co/api/v1/proxy?foo=bar"
+        )
+
+    def test_preserves_fragment(self):
+        assert (
+            _ensure_proxy_suffix("https://api.promptguard.co/api/v1#frag")
+            == "https://api.promptguard.co/api/v1/proxy#frag"
+        )
+
+    def test_does_not_double_append_with_query(self):
+        assert (
+            _ensure_proxy_suffix("https://api.promptguard.co/api/v1/proxy?x=1")
+            == "https://api.promptguard.co/api/v1/proxy?x=1"
+        )
+
+    def test_does_not_match_proxy_as_substring(self):
+        # A segment that merely contains "proxy" must still get the suffix.
+        assert (
+            _ensure_proxy_suffix("https://api.promptguard.co/api/v1/myproxy")
+            == "https://api.promptguard.co/api/v1/myproxy/proxy"
+        )
+
+
+# ── Quota error parsing ──────────────────────────────────────────────
 
 
 class TestQuotaErrorParsing:

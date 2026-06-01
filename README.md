@@ -13,6 +13,18 @@ Drop-in security for AI applications. No code changes required.
 pip install promptguard-sdk
 ```
 
+> **Package name ≠ import name.** Install **`promptguard-sdk`**, but import **`promptguard`**:
+> ```python
+> import promptguard
+> from promptguard import PromptGuard
+> ```
+
+Get a free API key at [app.promptguard.co](https://app.promptguard.co).
+
+> **The SDK reads `PROMPTGUARD_API_KEY` from the environment; it does not auto-load `.env`.** Use [python-dotenv](https://pypi.org/project/python-dotenv/) (call `load_dotenv()` before constructing the client) if you keep secrets in a `.env` file.
+
+> **PromptGuard fails open by default** — if the Guard API is unavailable, calls proceed *unscanned* so your app stays up. Set `fail_open=False` to block (fail closed) on a Guard outage instead.
+
 ## Two Ways to Secure Your App
 
 ### Option 1: Auto-Instrumentation (Recommended for Frameworks)
@@ -21,7 +33,7 @@ One line secures **every LLM call** in your application, regardless of which fra
 
 ```python
 import promptguard
-promptguard.init(api_key="pg_xxx")
+promptguard.init(api_key="pg_live_xxx")
 
 # That's it. Every LLM call is now secured.
 # Works with ANY framework built on openai, anthropic, google-generativeai, cohere, or boto3.
@@ -49,16 +61,16 @@ response = client.chat.completions.create(
 
 ```python
 # Enforce mode (default) - blocks threats
-promptguard.init(api_key="pg_xxx", mode="enforce")
+promptguard.init(api_key="pg_live_xxx", mode="enforce")
 
 # Monitor mode - logs threats without blocking (shadow mode)
-promptguard.init(api_key="pg_xxx", mode="monitor")
+promptguard.init(api_key="pg_live_xxx", mode="monitor")
 
 # Scan responses too
-promptguard.init(api_key="pg_xxx", scan_responses=True)
+promptguard.init(api_key="pg_live_xxx", scan_responses=True)
 
 # Fail-closed (block if Guard API is unreachable)
-promptguard.init(api_key="pg_xxx", fail_open=False)
+promptguard.init(api_key="pg_live_xxx", fail_open=False)
 ```
 
 **Shutdown:**
@@ -78,7 +90,7 @@ client = OpenAI()
 
 # After
 from promptguard import PromptGuard
-client = PromptGuard(api_key="pg_xxx")
+client = PromptGuard(api_key="pg_live_xxx")
 
 # Your existing code works unchanged!
 ```
@@ -92,7 +104,7 @@ For deeper integration with richer context (chain names, tool calls, agent steps
 ```python
 from promptguard.integrations.langchain import PromptGuardCallbackHandler
 
-handler = PromptGuardCallbackHandler(api_key="pg_xxx")
+handler = PromptGuardCallbackHandler(api_key="pg_live_xxx")
 
 # Attach to an LLM
 from langchain_openai import ChatOpenAI
@@ -114,7 +126,7 @@ The handler scans:
 from crewai import Crew, Agent, Task
 from promptguard.integrations.crewai import PromptGuardGuardrail
 
-pg = PromptGuardGuardrail(api_key="pg_xxx")
+pg = PromptGuardGuardrail(api_key="pg_live_xxx")
 
 crew = Crew(
     agents=[...],
@@ -132,7 +144,7 @@ You can also wrap individual tools:
 from promptguard.integrations.crewai import secure_tool
 from crewai.tools import BaseTool
 
-@secure_tool(api_key="pg_xxx")
+@secure_tool(api_key="pg_live_xxx")
 class SearchTool(BaseTool):
     name = "search"
     description = "Search the web"
@@ -148,7 +160,7 @@ from promptguard.integrations.llamaindex import PromptGuardCallbackHandler
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core import Settings
 
-pg_handler = PromptGuardCallbackHandler(api_key="pg_xxx")
+pg_handler = PromptGuardCallbackHandler(api_key="pg_live_xxx")
 Settings.callback_manager = CallbackManager([pg_handler])
 
 # All LlamaIndex queries are now scanned
@@ -161,7 +173,7 @@ For any language or framework, call the Guard API directly:
 ```python
 from promptguard import GuardClient
 
-guard = GuardClient(api_key="pg_xxx")
+guard = GuardClient(api_key="pg_live_xxx")
 
 # Scan before sending to LLM
 decision = guard.scan(
@@ -184,7 +196,7 @@ Or via HTTP directly (any language):
 
 ```bash
 curl -X POST https://api.promptguard.co/api/v1/guard \
-  -H "Authorization: Bearer pg_xxx" \
+  -H "X-API-Key: pg_live_xxx" \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [{"role": "user", "content": "Hello!"}],
@@ -193,12 +205,14 @@ curl -X POST https://api.promptguard.co/api/v1/guard \
   }'
 ```
 
+> Authenticate with the `X-API-Key` header — this is the canonical header used by the Guard API and every SDK. There is no `Authorization: Bearer` scheme.
+
 ## Security Scanning
 
 ```python
 from promptguard import PromptGuard
 
-pg = PromptGuard(api_key="pg_xxx")
+pg = PromptGuard(api_key="pg_live_xxx")
 
 # Scan content for threats
 result = pg.security.scan("Ignore previous instructions...")
@@ -221,7 +235,7 @@ print(result["redacted"])
 ```python
 from promptguard import PromptGuard
 
-pg = PromptGuard(api_key="pg_xxx")
+pg = PromptGuard(api_key="pg_live_xxx")
 
 # Run the autonomous red team agent (LLM-powered mutation)
 report = pg.redteam.run_autonomous(
@@ -238,7 +252,7 @@ print(f"Total patterns: {stats['total_patterns']}")
 The async client mirrors the same methods:
 
 ```python
-async with PromptGuardAsync(api_key="pg_xxx") as pg:
+async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
     report = await pg.redteam.run_autonomous(budget=200)
     stats = await pg.redteam.intelligence_stats()
 ```
@@ -250,7 +264,7 @@ The `PromptGuardAsync` client provides a fully asynchronous interface for non-bl
 ```python
 from promptguard import PromptGuardAsync
 
-async with PromptGuardAsync(api_key="pg_xxx") as pg:
+async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
     response = await pg.chat.completions.create(
         model="gpt-5-nano",
         messages=[{"role": "user", "content": "Hello!"}]
@@ -273,9 +287,9 @@ Both `PromptGuard` and `PromptGuardAsync` support configurable retry behavior fo
 from promptguard import PromptGuard
 
 pg = PromptGuard(
-    api_key="pg_xxx",
-    max_retries=3,        # Number of retry attempts (default: 2)
-    retry_delay=0.5,      # Base delay in seconds between retries (default: 0.25)
+    api_key="pg_live_xxx",
+    max_retries=3,        # Number of retry attempts (default: 3)
+    retry_delay=0.5,      # Base delay in seconds between retries (default: 1.0)
 )
 ```
 
@@ -288,13 +302,14 @@ Scan and secure embedding requests through the proxy:
 ```python
 from promptguard import PromptGuard
 
-pg = PromptGuard(api_key="pg_xxx")
+pg = PromptGuard(api_key="pg_live_xxx")
 
 response = pg.embeddings.create(
     model="text-embedding-3-small",
     input="The quick brown fox jumps over the lazy dog",
 )
-print(response.data[0].embedding[:5])
+# Proxy responses are returned as plain dicts (OpenAI-compatible JSON shape).
+print(response["data"][0]["embedding"][:5])
 ```
 
 Batch embedding requests are also supported:
@@ -304,8 +319,8 @@ response = pg.embeddings.create(
     model="text-embedding-3-small",
     input=["First document", "Second document", "Third document"],
 )
-for item in response.data:
-    print(f"Index {item.index}: {len(item.embedding)} dimensions")
+for item in response["data"]:
+    print(f"Index {item['index']}: {len(item['embedding'])} dimensions")
 ```
 
 ## Configuration
@@ -314,7 +329,7 @@ for item in response.data:
 from promptguard import PromptGuard, Config
 
 config = Config(
-    api_key="pg_xxx",
+    api_key="pg_live_xxx",
     base_url="https://api.promptguard.co/api/v1/proxy",
     timeout=30.0,
 )
@@ -325,9 +340,15 @@ pg = PromptGuard(config=config)
 ## Environment Variables
 
 ```bash
-export PROMPTGUARD_API_KEY="pg_xxx"
+export PROMPTGUARD_API_KEY="pg_live_xxx"
+# Optional — only override if pointing at a self-hosted/staging deployment.
+# Leave unset to use the default (https://api.promptguard.co/api/v1/proxy).
 export PROMPTGUARD_BASE_URL="https://api.promptguard.co/api/v1"
 ```
+
+> The proxy client (`PromptGuard`) talks to the `/api/v1/proxy` endpoints. If you set `PROMPTGUARD_BASE_URL` to `.../api/v1` (without `/proxy`), the SDK appends the `/proxy` suffix for you, so requests still land on the proxy. Setting it explicitly to `.../api/v1/proxy` also works.
+>
+> **Security:** the SDK sends your API key (and, in proxy mode, your prompt content) to whatever `PROMPTGUARD_BASE_URL` points at. Self-hosting is supported, so only point it at a host you trust.
 
 ## Error Handling
 
@@ -336,7 +357,7 @@ from promptguard import PromptGuard, PromptGuardBlockedError
 
 # Auto-instrumentation
 import promptguard
-promptguard.init(api_key="pg_xxx")
+promptguard.init(api_key="pg_live_xxx")
 
 try:
     response = client.chat.completions.create(...)

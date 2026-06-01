@@ -8,7 +8,7 @@ Usage (proxy mode - existing):
 
     from promptguard import PromptGuard
 
-    pg = PromptGuard(api_key="pg_xxx")
+    pg = PromptGuard(api_key="pg_live_xxx")
     response = pg.chat.completions.create(
         model="gpt-5-nano",
         messages=[{"role": "user", "content": "Hello!"}]
@@ -17,7 +17,7 @@ Usage (proxy mode - existing):
 Usage (auto-instrumentation - new):
 
     import promptguard
-    promptguard.init(api_key="pg_xxx")
+    promptguard.init(api_key="pg_live_xxx")
 
     # Now ALL LLM calls are secured, regardless of framework.
     from openai import OpenAI
@@ -27,7 +27,12 @@ Usage (auto-instrumentation - new):
 
 from promptguard._version import __version__
 from promptguard.auto import init, shutdown
-from promptguard.client import PromptGuard, PromptGuardAsync, PromptGuardError
+from promptguard.client import (
+    PromptGuard,
+    PromptGuardAsync,
+    PromptGuardError,
+    SecurityScanResult,
+)
 from promptguard.config import Config
 from promptguard.guard import GuardApiError, GuardClient, GuardDecision, PromptGuardBlockedError
 
@@ -40,6 +45,7 @@ __all__ = [
     "PromptGuardAsync",
     "PromptGuardBlockedError",
     "PromptGuardError",
+    "SecurityScanResult",
     "__version__",
     "init",
     "shutdown",
