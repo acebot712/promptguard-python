@@ -81,7 +81,8 @@ class PromptGuardGuardrail:
 
         messages = [{"role": "assistant", "content": text}]
         context = {"framework": "crewai", "metadata": {"hook": "after_kickoff"}}
-        self._scan_and_check(messages, "output", context)
+        decision = self._scan_and_check(messages, "output", context)
+        self._enforce_output_redaction(decision, hook="after_kickoff")
         return result
 
     def scan_task_output(self, output: str, task_name: str = "unknown") -> str:
@@ -91,7 +92,8 @@ class PromptGuardGuardrail:
             "framework": "crewai",
             "metadata": {"hook": "task_output", "task_name": task_name},
         }
-        self._scan_and_check(messages, "output", context)
+        decision = self._scan_and_check(messages, "output", context)
+        self._enforce_output_redaction(decision, hook=f"task_output:{task_name}")
         return output
 
     # -- Internal helpers ----------------------------------------------------
@@ -125,6 +127,33 @@ class PromptGuardGuardrail:
             )
 
         return decision
+
+    def _enforce_output_redaction(self, decision: GuardDecision | None, *, hook: str) -> None:
+        """Handle a redact decision on an output-direction scan.
+
+        A CrewAI after/task callback observes the finished output but cannot
+        safely rewrite the crew's result in place, so — mirroring the
+        langchain/llamaindex posture — in enforce mode we block rather than let
+        unredacted content through; in monitor mode we warn.
+        """
+        if decision is None or not decision.redacted:
+            return
+        if self._mode == "enforce":
+            logger.error(
+                "PromptGuard: redaction required for crew output (%s) but the "
+                "callback cannot rewrite the result in place; blocking to avoid "
+                "returning unredacted content (threat=%s, event=%s)",
+                hook,
+                decision.threat_type,
+                decision.event_id,
+            )
+            raise PromptGuardBlockedError(decision)
+        logger.warning(
+            "[monitor] PromptGuard would redact crew output (%s): %s (event=%s)",
+            hook,
+            decision.threat_type,
+            decision.event_id,
+        )
 
     @staticmethod
     def _inputs_to_messages(inputs: dict[str, Any]) -> list[dict[str, str]]:

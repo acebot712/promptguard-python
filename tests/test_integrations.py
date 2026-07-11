@@ -254,6 +254,60 @@ class TestCrewAIGuardrail:
         result = guard.scan_task_output("Task completed.", task_name="research")
         assert result == "Task completed."
 
+    @patch.object(GuardClient, "scan")
+    def test_after_kickoff_block(self, mock_scan):
+        mock_scan.return_value = GuardDecision(
+            {"decision": "block", "threat_type": "prompt_injection", "event_id": "evt"}
+        )
+        guard = self._make_guardrail(mode="enforce")
+        with pytest.raises(PromptGuardBlockedError):
+            guard.after_kickoff("leaked output")
+
+    @patch.object(GuardClient, "scan")
+    def test_after_kickoff_redact_enforce_blocks(self, mock_scan):
+        # A redact decision on output can't be rewritten by a callback, so
+        # enforce mode must block rather than return the original text.
+        mock_scan.return_value = GuardDecision(
+            {
+                "decision": "redact",
+                "threat_type": "pii_leak",
+                "event_id": "evt",
+                "redacted_messages": [{"role": "assistant", "content": "clean"}],
+            }
+        )
+        guard = self._make_guardrail(mode="enforce")
+        with pytest.raises(PromptGuardBlockedError):
+            guard.after_kickoff("My SSN is 123-45-6789")
+
+    @patch.object(GuardClient, "scan")
+    def test_after_kickoff_redact_monitor_warns(self, mock_scan):
+        mock_scan.return_value = GuardDecision(
+            {
+                "decision": "redact",
+                "threat_type": "pii_leak",
+                "event_id": "evt",
+                "redacted_messages": [{"role": "assistant", "content": "clean"}],
+            }
+        )
+        guard = self._make_guardrail(mode="monitor")
+        # Monitor mode logs but does not raise; original result passes through.
+        result = guard.after_kickoff("My SSN is 123-45-6789")
+        assert result == "My SSN is 123-45-6789"
+
+    @patch.object(GuardClient, "scan")
+    def test_scan_task_output_redact_enforce_blocks(self, mock_scan):
+        mock_scan.return_value = GuardDecision(
+            {
+                "decision": "redact",
+                "threat_type": "pii_leak",
+                "event_id": "evt",
+                "redacted_messages": [{"role": "assistant", "content": "clean"}],
+            }
+        )
+        guard = self._make_guardrail(mode="enforce")
+        with pytest.raises(PromptGuardBlockedError):
+            guard.scan_task_output("My SSN is 123-45-6789", task_name="research")
+
     def test_empty_inputs_passthrough(self):
         guard = self._make_guardrail()
         result = guard.before_kickoff({"count": 42, "flag": True})
