@@ -293,6 +293,48 @@ class TestAsyncRetry:
         assert result == {"recovered": True}
 
 
+# ── 2xx with non-JSON body ────────────────────────────────────────────
+
+
+def _non_json_response(status=200):
+    # A 2xx with a text/plain body: ``.json()`` raises json.JSONDecodeError.
+    return httpx.Response(
+        status_code=status,
+        text="<html>gateway hiccup</html>",
+        request=httpx.Request("POST", "http://test"),
+    )
+
+
+class TestNonJsonBody:
+    def test_sync_non_json_2xx_raises_typed_error(self):
+        c = _make_sync_client()
+        c._http = MagicMock()
+        c._http.request.return_value = _non_json_response(200)
+        with pytest.raises(PromptGuardError) as exc:
+            c._request("POST", "/test")
+        assert exc.value.code == "INVALID_RESPONSE"
+        assert exc.value.status_code == 200
+
+    def test_sync_non_json_204ish_raises_typed_error(self):
+        c = _make_sync_client()
+        c._http = MagicMock()
+        c._http.request.return_value = _non_json_response(202)
+        with pytest.raises(PromptGuardError) as exc:
+            c._request("POST", "/test")
+        assert exc.value.code == "INVALID_RESPONSE"
+        assert exc.value.status_code == 202
+
+    @pytest.mark.asyncio
+    async def test_async_non_json_2xx_raises_typed_error(self):
+        c = _make_async_client()
+        c._http = AsyncMock()
+        c._http.request = AsyncMock(return_value=_non_json_response(200))
+        with pytest.raises(PromptGuardError) as exc:
+            await c._request("POST", "/test")
+        assert exc.value.code == "INVALID_RESPONSE"
+        assert exc.value.status_code == 200
+
+
 # ── Context managers ──────────────────────────────────────────────────
 
 

@@ -516,7 +516,14 @@ class PromptGuard:
             if response.status_code >= 400:
                 raise _parse_error(response)
 
-            data: dict[str, Any] = response.json()
+            try:
+                data: dict[str, Any] = response.json()
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise PromptGuardError(
+                    message=f"API returned a {response.status_code} with a non-JSON body",
+                    code="INVALID_RESPONSE",
+                    status_code=response.status_code,
+                ) from exc
             return data
 
         if last_exc:
@@ -833,7 +840,14 @@ class PromptGuardAsync:
             if response.status_code >= 400:
                 raise _parse_error(response)
 
-            data: dict[str, Any] = response.json()
+            try:
+                data: dict[str, Any] = response.json()
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise PromptGuardError(
+                    message=f"API returned a {response.status_code} with a non-JSON body",
+                    code="INVALID_RESPONSE",
+                    status_code=response.status_code,
+                ) from exc
             return data
 
         if last_exc:
