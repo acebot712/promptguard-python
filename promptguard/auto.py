@@ -25,7 +25,7 @@ import logging
 import threading
 from typing import Any
 
-from promptguard._resolve import resolve_credentials
+from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.guard import GuardClient
 
 logger = logging.getLogger("promptguard")
@@ -69,16 +69,20 @@ def init(
         unreachable.  Set to ``False`` to fail-closed.
     scan_responses:
         If ``True``, also scan LLM responses through the Guard API with
-        ``direction="output"``.
+        ``direction="output"``.  Defaults to ``False`` here (the zero-config
+        drop-in) to avoid doubling Guard API round-trips per LLM call; the
+        framework callback handlers default this to ``True`` because they
+        already receive response events for free.
     timeout:
-        HTTP timeout (seconds) for Guard API calls.
+        HTTP timeout (seconds) for Guard API calls.  Defaults to ``10.0``: the
+        Guard scan is a fast, standalone call in the request path.  (The proxy
+        client's default is ``30.0`` because it fronts the full upstream LLM
+        call, which is inherently slower.)
     """
     global _guard_client, _mode, _fail_open, _scan_responses
 
     resolved_key, resolved_url = resolve_credentials(api_key, base_url)
-
-    if mode not in ("enforce", "monitor"):
-        raise ValueError(f"mode must be 'enforce' or 'monitor', got {mode!r}")
+    validate_mode(mode)
 
     new_client = GuardClient(
         api_key=resolved_key,
@@ -101,10 +105,12 @@ def init(
 
     _apply_patches()
 
+    patched = patched_sdks()
     logger.info(
-        "PromptGuard auto-instrumentation initialised (mode=%s, fail_open=%s)",
+        "PromptGuard auto-instrumentation initialised (mode=%s, fail_open=%s); patched SDKs: %s",
         mode,
         fail_open,
+        ", ".join(patched) if patched else "none detected",
     )
 
 
@@ -141,6 +147,30 @@ def is_fail_open() -> bool:
 
 def should_scan_responses() -> bool:
     return _scan_responses
+
+
+# -- Introspection helpers (public API) --------------------------------------
+
+
+def patched_sdks() -> list[str]:
+    """Return the names of the SDKs actually patched by the last ``init()``.
+
+    Useful in tests/health checks to assert instrumentation is live, e.g.::
+
+        promptguard.init(api_key=...)
+        assert "openai" in promptguard.patched_sdks()
+
+    Returns an empty list before ``init()`` or after ``shutdown()``, or when no
+    supported SDK is importable in the current environment.
+    """
+    return [patch_module.NAME for patch_module in _applied_patches]
+
+
+def is_active() -> bool:
+    """Return ``True`` when auto-instrumentation is initialised (a guard client
+    is installed). Note this is independent of whether any SDK was patchable —
+    use :func:`patched_sdks` to confirm specific SDKs are instrumented."""
+    return _guard_client is not None
 
 
 # -- Patch orchestration -----------------------------------------------------

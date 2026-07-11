@@ -4,6 +4,24 @@ import os
 
 _DEFAULT_BASE_URL = "https://api.promptguard.co/api/v1"
 
+# The only valid enforcement modes. Kept here (not duplicated per integration)
+# so every entry point validates identically.
+VALID_MODES = ("enforce", "monitor")
+
+
+def validate_mode(mode: str) -> str:
+    """Validate an enforcement ``mode``, raising ``ValueError`` if unknown.
+
+    Every entry point (``init()`` and each framework integration) must call
+    this. A silently-accepted bad mode (e.g. ``"Enforce"``, ``"block"``, a
+    typo) is security-adjacent: integrations only *block* when the mode is
+    exactly ``"enforce"``, so an unrecognised value would fail open and stop
+    blocking. Fail loudly at construction time instead.
+    """
+    if mode not in VALID_MODES:
+        raise ValueError(f"mode must be 'enforce' or 'monitor', got {mode!r}")
+    return mode
+
 
 def resolve_credentials(
     api_key: str | None = None,

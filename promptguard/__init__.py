@@ -26,7 +26,7 @@ Usage (auto-instrumentation - new):
 """
 
 from promptguard._version import __version__
-from promptguard.auto import init, shutdown
+from promptguard.auto import init, is_active, patched_sdks, shutdown
 from promptguard.client import (
     PromptGuard,
     PromptGuardAsync,
@@ -48,5 +48,7 @@ __all__ = [
     "SecurityScanResult",
     "__version__",
     "init",
+    "is_active",
+    "patched_sdks",
     "shutdown",
 ]

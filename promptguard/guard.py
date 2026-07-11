@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from promptguard._resolve import resolve_credentials
 from promptguard._version import __version__
 
 logger = logging.getLogger("promptguard")
@@ -120,16 +121,25 @@ class GuardClient:
     Provides both sync and async methods.  The client itself never
     swallows errors; callers (patches, integrations) decide whether
     to fail open or closed based on configuration.
+
+    ``timeout`` defaults to ``10.0`` seconds — the Guard scan is a fast,
+    standalone call.  (The proxy client / ``Config`` default is ``30.0`` because
+    it fronts the full upstream LLM call.)  ``api_key`` / ``base_url`` fall back
+    to ``PROMPTGUARD_API_KEY`` / ``PROMPTGUARD_BASE_URL`` when omitted.
     """
 
     def __init__(
         self,
-        api_key: str,
-        base_url: str = "https://api.promptguard.co/api/v1",
+        api_key: str | None = None,
+        base_url: str | None = None,
         timeout: float = 10.0,
     ):
-        self._api_key = api_key
-        self._guard_url = f"{base_url.rstrip('/')}/guard"
+        # Route through the shared resolver so a missing key falls back to
+        # PROMPTGUARD_API_KEY and, if still absent, raises the same actionable
+        # ValueError as every other entry point (rather than a bare TypeError).
+        resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+        self._api_key = resolved_key
+        self._guard_url = f"{resolved_url.rstrip('/')}/guard"
         self._timeout = timeout
         self._sync_client: httpx.Client | None = None
         # An httpx.AsyncClient is bound to the event loop it was created on,

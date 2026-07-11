@@ -5,7 +5,13 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Config:
-    """Configuration for PromptGuard SDK"""
+    """Configuration for the proxy ``PromptGuard`` client.
+
+    ``timeout`` defaults to ``30.0`` seconds here (vs ``10.0`` for the
+    standalone Guard scan path / ``GuardClient`` / ``init()``): the proxy fronts
+    the full upstream LLM call, which is inherently slower than an isolated
+    Guard scan, so it needs a longer ceiling.
+    """
 
     # ``repr=False`` keeps the API key out of ``repr(config)`` / logs / tracebacks.
     api_key: str = field(repr=False)

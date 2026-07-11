@@ -28,7 +28,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from promptguard._resolve import resolve_credentials
+from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
@@ -46,6 +46,7 @@ class PromptGuardGuardrail:
         timeout: float = 10.0,
     ):
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+        validate_mode(mode)
         self._guard = GuardClient(
             api_key=resolved_key,
             base_url=resolved_url,
@@ -208,6 +209,7 @@ def secure_tool(
 ) -> Callable:
     """Decorator to wrap a CrewAI tool's ``_run`` method with PromptGuard."""
     resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+    validate_mode(mode)
     guard = GuardClient(api_key=resolved_key, base_url=resolved_url)
 
     def decorator(cls):
