@@ -54,6 +54,74 @@ class TestGuardDecisionContract:
 
 
 # ---------------------------------------------------------------------------
+# Redaction enforcement (v1.5.0)
+# ---------------------------------------------------------------------------
+
+
+class TestRedactionEnforcementContract:
+    """Drives the central pre-call decision handling (``wrap_sync``) with each
+    contract case: a redact decision with missing/empty/partial
+    redacted_messages must escalate to block in enforce mode."""
+
+    def test_all_cases(self, contract, monkeypatch):
+        import promptguard.auto as auto
+        from promptguard.guard import GuardDecision, PromptGuardBlockedError
+        from promptguard.patches._base import wrap_sync
+
+        for case in contract["redaction_enforcement"]["cases"]:
+            decision = GuardDecision(case["decision"])
+            scanned = case["scanned_messages"]
+
+            class StubGuard:
+                def __init__(self, d):
+                    self._d = d
+
+                def scan(self, messages, direction="input", model=None, context=None):
+                    return self._d
+
+            monkeypatch.setattr(auto, "_guard_client", StubGuard(decision))
+            monkeypatch.setattr(auto, "_mode", case["mode"])
+            monkeypatch.setattr(auto, "_fail_open", True)
+            monkeypatch.setattr(auto, "_scan_responses", False)
+
+            forwarded: dict = {}
+
+            def original(*, forwarded=forwarded, **kwargs):
+                forwarded.update(kwargs)
+                return "ok"
+
+            def extract(args, kwargs, scanned=scanned):
+                return scanned, None, {"framework": "contract"}
+
+            applier = None
+            if case["has_redaction_applier"]:
+
+                def applier(args, kwargs, redacted):
+                    new_kwargs = dict(kwargs)
+                    new_kwargs["messages"] = redacted
+                    return new_kwargs
+
+            wrapped = wrap_sync(original, extract, lambda response: None, applier)
+
+            if case["expect"] == "block":
+                with pytest.raises(PromptGuardBlockedError):
+                    wrapped(messages=scanned)
+                assert forwarded == {}, f"{case['name']}: original ran despite block"
+            elif case["expect"] == "apply":
+                wrapped(messages=scanned)
+                assert forwarded["messages"] == case["decision"]["redacted_messages"], (
+                    f"{case['name']}: redacted content not forwarded"
+                )
+            elif case["expect"] == "passthrough":
+                wrapped(messages=scanned)
+                assert forwarded["messages"] == scanned, (
+                    f"{case['name']}: original content not passed through"
+                )
+            else:  # pragma: no cover - contract drift guard
+                raise AssertionError(f"{case['name']}: unknown expect {case['expect']!r}")
+
+
+# ---------------------------------------------------------------------------
 # OpenAI message conversion
 # ---------------------------------------------------------------------------
 

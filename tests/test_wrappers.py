@@ -153,6 +153,111 @@ class TestWrapSync:
             wrapped(messages=[{"role": "user", "content": "My SSN is 123-45-6789"}])
         assert called is False
 
+    def test_redact_missing_payload_blocks_in_enforce(self, guard_env):
+        """Redact decision with NO redacted_messages cannot be honored → block."""
+        guard_env(StubGuard(input_decision=_decision("redact", threat_type="pii")))
+        called = False
+
+        def original(**kwargs):
+            nonlocal called
+            called = True
+            return "leaked"
+
+        wrapped = wrap_sync(original, _extract_messages, _extract_response, _apply_redaction)
+        with pytest.raises(PromptGuardBlockedError):
+            wrapped(messages=[{"role": "user", "content": "My SSN is 123-45-6789"}])
+        assert called is False
+
+    def test_redact_empty_payload_blocks_in_enforce(self, guard_env):
+        guard_env(StubGuard(input_decision=_decision("redact", redacted_messages=[])))
+        wrapped = wrap_sync(
+            lambda **k: "leaked", _extract_messages, _extract_response, _apply_redaction
+        )
+        with pytest.raises(PromptGuardBlockedError):
+            wrapped(messages=[{"role": "user", "content": "My SSN is 123-45-6789"}])
+
+    def test_redact_partial_payload_blocks_in_enforce(self, guard_env):
+        """Fewer redacted messages than scanned ones would leave the tail
+        unredacted → escalate to block."""
+        guard_env(
+            StubGuard(
+                input_decision=_decision(
+                    "redact",
+                    redacted_messages=[{"role": "user", "content": "[REDACTED]"}],
+                )
+            )
+        )
+        called = False
+
+        def original(**kwargs):
+            nonlocal called
+            called = True
+            return "leaked"
+
+        wrapped = wrap_sync(original, _extract_messages, _extract_response, _apply_redaction)
+        with pytest.raises(PromptGuardBlockedError):
+            wrapped(
+                messages=[
+                    {"role": "user", "content": "My SSN is 123-45-6789"},
+                    {"role": "user", "content": "My card is 4111-1111-1111-1111"},
+                ]
+            )
+        assert called is False
+
+    def test_redact_partial_payload_monitor_passes_through(self, guard_env):
+        guard_env(
+            StubGuard(
+                input_decision=_decision(
+                    "redact",
+                    redacted_messages=[{"role": "user", "content": "[REDACTED]"}],
+                )
+            ),
+            mode="monitor",
+        )
+        seen = {}
+        wrapped = wrap_sync(
+            lambda **k: seen.update(k), _extract_messages, _extract_response, _apply_redaction
+        )
+        original_messages = [
+            {"role": "user", "content": "one"},
+            {"role": "user", "content": "two"},
+        ]
+        wrapped(messages=original_messages)
+        assert seen["messages"] == original_messages
+
+    def test_redact_applier_returning_none_blocks_in_enforce(self, guard_env):
+        """An applier that cannot rewrite the call shape signals None → block."""
+        redacted = [{"role": "user", "content": "[REDACTED]"}]
+        guard_env(StubGuard(input_decision=_decision("redact", redacted_messages=redacted)))
+        called = False
+
+        def original(**kwargs):
+            nonlocal called
+            called = True
+            return "leaked"
+
+        wrapped = wrap_sync(original, _extract_messages, _extract_response, lambda a, k, r: None)
+        with pytest.raises(PromptGuardBlockedError):
+            wrapped(messages=[{"role": "user", "content": "x"}])
+        assert called is False
+
+    def test_redact_extra_payload_applies_in_enforce(self, guard_env):
+        """More redacted messages than scanned is fine (extras ignored)."""
+        redacted = [
+            {"role": "user", "content": "[REDACTED]"},
+            {"role": "user", "content": "extra"},
+        ]
+        guard_env(StubGuard(input_decision=_decision("redact", redacted_messages=redacted)))
+        seen = {}
+
+        def original(**kwargs):
+            seen.update(kwargs)
+            return "ok"
+
+        wrapped = wrap_sync(original, _extract_messages, _extract_response, _apply_redaction)
+        wrapped(messages=[{"role": "user", "content": "orig"}])
+        assert seen["messages"] == redacted
+
     def test_redact_without_handler_monitor_passes_through(self, guard_env):
         redacted = [{"role": "user", "content": "[REDACTED]"}]
         guard_env(
@@ -275,6 +380,44 @@ class TestWrapAsync:
         wrapped = wrap_async(original, _extract_messages, _extract_response, _apply_redaction)
         await wrapped(messages=[{"role": "user", "content": "orig"}])
         assert seen["messages"] == redacted
+
+    @pytest.mark.asyncio
+    async def test_redact_missing_payload_blocks_in_enforce(self, guard_env):
+        guard_env(StubGuard(input_decision=_decision("redact", threat_type="pii")))
+        called = False
+
+        async def original(**kwargs):
+            nonlocal called
+            called = True
+            return "leaked"
+
+        wrapped = wrap_async(original, _extract_messages, _extract_response, _apply_redaction)
+        with pytest.raises(PromptGuardBlockedError):
+            await wrapped(messages=[{"role": "user", "content": "My SSN is 123-45-6789"}])
+        assert called is False
+
+    @pytest.mark.asyncio
+    async def test_redact_partial_payload_blocks_in_enforce(self, guard_env):
+        guard_env(
+            StubGuard(
+                input_decision=_decision(
+                    "redact",
+                    redacted_messages=[{"role": "user", "content": "[REDACTED]"}],
+                )
+            )
+        )
+
+        async def original(**kwargs):
+            return "leaked"
+
+        wrapped = wrap_async(original, _extract_messages, _extract_response, _apply_redaction)
+        with pytest.raises(PromptGuardBlockedError):
+            await wrapped(
+                messages=[
+                    {"role": "user", "content": "one"},
+                    {"role": "user", "content": "two"},
+                ]
+            )
 
     @pytest.mark.asyncio
     async def test_redact_without_handler_blocks(self, guard_env):
