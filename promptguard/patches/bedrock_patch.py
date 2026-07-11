@@ -245,6 +245,121 @@ def _flatten_content_blocks(content: Any) -> str:
     return str(content)
 
 
+# -- Response extraction (for scan_responses=True) ---------------------------
+
+
+def _extract_response(response: Any) -> str | None:
+    """Extract assistant text from a Bedrock response for output scanning.
+
+    Handles both surfaces:
+    - Converse / ConverseStream: text lives in ``output.message.content[].text``.
+    - InvokeModel: the model output is a JSON body whose schema varies by
+      provider (Anthropic / Titan / Llama / Mistral), mirroring the request
+      body parser above.
+
+    Returns ``None`` for any shape we don't recognise so the caller simply
+    skips output scanning rather than scanning garbage.
+    """
+    if not isinstance(response, dict):
+        return None
+
+    # Converse: {"output": {"message": {"role": ..., "content": [{"text": ...}]}}}
+    output = response.get("output")
+    if isinstance(output, dict):
+        message = output.get("message")
+        if isinstance(message, dict):
+            text = _flatten_content_blocks(message.get("content", ""))
+            return text or None
+
+    # InvokeModel: the provider body is a StreamingBody / bytes / str.
+    if "body" in response:
+        return _extract_invoke_response_text(response)
+
+    return None
+
+
+def _read_response_body(response: dict) -> bytes | bytearray | str | None:
+    """Read the InvokeModel response body without stealing it from the caller.
+
+    A botocore ``StreamingBody`` can only be read once, so after we consume it
+    we replace ``response["body"]`` with a fresh stream over the same bytes so
+    the application's own ``response["body"].read()`` still works.
+    """
+    raw = response.get("body")
+    if isinstance(raw, bytes | bytearray | str):
+        return raw
+
+    read = getattr(raw, "read", None)
+    if read is None:
+        return None
+    try:
+        data = read()
+    except Exception:
+        logger.debug("Failed to read Bedrock InvokeModel response body", exc_info=True)
+        return None
+
+    if not isinstance(data, bytes | bytearray | str):
+        return None
+
+    if isinstance(data, bytes | bytearray):
+        try:
+            import io
+
+            from botocore.response import StreamingBody
+
+            response["body"] = StreamingBody(io.BytesIO(data), len(data))
+        except Exception:
+            # If we can't rebuild a StreamingBody, hand the raw bytes back so the
+            # caller at least still has the payload.
+            response["body"] = data
+    return data
+
+
+def _extract_invoke_response_text(response: dict) -> str | None:
+    data = _read_response_body(response)
+    if data is None:
+        return None
+    try:
+        parsed = json.loads(data)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    # Anthropic messages API: {"content": [{"type": "text", "text": ...}], ...}
+    content = parsed.get("content")
+    if isinstance(content, list):
+        text = _flatten_content_blocks(content)
+        if text:
+            return text
+
+    # Anthropic legacy text-completion: {"completion": "..."}
+    if isinstance(parsed.get("completion"), str):
+        return parsed["completion"] or None
+
+    # Amazon Titan: {"results": [{"outputText": "..."}]}
+    results = parsed.get("results")
+    if isinstance(results, list):
+        joined = "\n".join(
+            r["outputText"] for r in results if isinstance(r, dict) and r.get("outputText")
+        )
+        if joined:
+            return joined
+
+    # Meta Llama: {"generation": "..."}
+    if isinstance(parsed.get("generation"), str):
+        return parsed["generation"] or None
+
+    # Mistral: {"outputs": [{"text": "..."}]}
+    outputs = parsed.get("outputs")
+    if isinstance(outputs, list):
+        joined = "\n".join(o["text"] for o in outputs if isinstance(o, dict) and o.get("text"))
+        if joined:
+            return joined
+
+    return None
+
+
 # -- Apply / revert ----------------------------------------------------------
 
 
@@ -264,7 +379,7 @@ def apply() -> bool:
         botocore.client.BaseClient._make_api_call = wrap_sync(
             _original_api_call,
             _extract_guard_messages,
-            lambda _: None,
+            _extract_response,
             apply_redaction=_apply_redaction,
             should_intercept=_should_intercept,
         )

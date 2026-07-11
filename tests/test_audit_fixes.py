@@ -228,6 +228,112 @@ class TestBedrockRedaction:
         assert json.loads(api_params["body"])["inputText"] == "clean"
 
 
+# ── Bedrock response extraction (scan_responses=True) ─────────────────────
+
+
+class _ReadOnceStream:
+    """Minimal stand-in for a botocore StreamingBody: readable exactly once."""
+
+    def __init__(self, data: bytes):
+        self._data = data
+        self.reads = 0
+
+    def read(self) -> bytes:
+        self.reads += 1
+        data, self._data = self._data, b""
+        return data
+
+
+class TestBedrockResponseExtraction:
+    def test_converse_output_message_extracted(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "hello "}, {"text": "world"}],
+                }
+            },
+            "stopReason": "end_turn",
+        }
+        assert _extract_response(response) == "hello \nworld"
+
+    def test_converse_empty_content_returns_none(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        response = {"output": {"message": {"role": "assistant", "content": []}}}
+        assert _extract_response(response) is None
+
+    def test_invoke_anthropic_body_bytes_extracted(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        body = json.dumps(
+            {"content": [{"type": "text", "text": "the answer"}], "stop_reason": "end_turn"}
+        ).encode()
+        assert _extract_response({"body": body}) == "the answer"
+
+    def test_invoke_anthropic_streaming_body_restored(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        raw = json.dumps({"content": [{"type": "text", "text": "streamed"}]}).encode()
+        stream = _ReadOnceStream(raw)
+        response = {"body": stream, "contentType": "application/json"}
+
+        assert _extract_response(response) == "streamed"
+        # The read-once stream was consumed exactly once and the body was put
+        # back so the caller can still read the payload.
+        assert stream.reads == 1
+        restored = response["body"]
+        data = restored.read() if hasattr(restored, "read") else restored
+        assert json.loads(data)["content"][0]["text"] == "streamed"
+
+    def test_invoke_anthropic_legacy_completion_extracted(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        body = json.dumps({"completion": "legacy text"}).encode()
+        assert _extract_response({"body": body}) == "legacy text"
+
+    def test_invoke_titan_results_extracted(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        body = json.dumps({"results": [{"outputText": "titan says hi"}]}).encode()
+        assert _extract_response({"body": body}) == "titan says hi"
+
+    def test_invoke_llama_generation_extracted(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        body = json.dumps({"generation": "llama out"}).encode()
+        assert _extract_response({"body": body}) == "llama out"
+
+    def test_invoke_mistral_outputs_extracted(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        body = json.dumps({"outputs": [{"text": "mistral out"}]}).encode()
+        assert _extract_response({"body": body}) == "mistral out"
+
+    def test_unknown_invoke_shape_returns_none(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        assert _extract_response({"body": json.dumps({"weird": 1}).encode()}) is None
+
+    def test_non_json_invoke_body_returns_none(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        assert _extract_response({"body": b"not json"}) is None
+
+    def test_non_dict_response_returns_none(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        assert _extract_response("nope") is None
+        assert _extract_response(None) is None
+
+    def test_response_without_output_or_body_returns_none(self):
+        from promptguard.patches.bedrock_patch import _extract_response
+
+        assert _extract_response({"stopReason": "end_turn"}) is None
+
+
 # ── Cohere redaction ──────────────────────────────────────────────────────
 
 
