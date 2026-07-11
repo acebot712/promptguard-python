@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -63,7 +64,14 @@ def resolve_ref(ref: str) -> str:
 
 def map_type(prop: dict) -> str:
     if "$ref" in prop:
-        return resolve_ref(prop["$ref"])
+        # A hostile spec can point ``$ref`` at a name containing a newline (or
+        # any non-identifier character); resolve_ref() returns the last path
+        # segment verbatim, so validate it before it is interpolated as a bare
+        # type name and fall back to ``Any`` on any mismatch.  Because map_type
+        # recurses, this same guard covers ``$ref`` inside ``anyOf`` and
+        # ``items`` too.
+        name = resolve_ref(prop["$ref"])
+        return name if _is_identifier(name) else "Any"
     if "anyOf" in prop:
         types = [map_type(p) for p in prop["anyOf"]]
         return " | ".join(types)
@@ -137,19 +145,57 @@ def generate_typed_dict(name: str, schema: dict) -> str:
     return "\n".join(lines)
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.stderr.write(
-            "Usage: python scripts/generate_types_from_spec.py <openapi-developer.json>\n"
+# The only statement kinds a pure type-definition module may contain. Anything
+# else (a function/async def, a `with`/`for`/`if`, a bare call expression, a
+# `del`, …) means executable code slipped past the string-level validation and
+# the module must not be written to disk.
+_ALLOWED_STMT_TYPES = (
+    ast.ClassDef,
+    ast.Assign,
+    ast.AnnAssign,
+    ast.Import,
+    ast.ImportFrom,
+)
+
+
+def _is_docstring_expr(node: ast.stmt) -> bool:
+    """True for a bare string-literal expression (module or class docstring)."""
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def _assert_types_only(source: str) -> None:
+    """Parse the generated module and reject anything but type declarations.
+
+    This is the second defence layer: even if a hostile spec smuggled a
+    breakout past the per-value string validation, the injected construct would
+    surface here as a disallowed AST node and abort the write.  Raises
+    ``ValueError`` (or ``SyntaxError`` from ``ast.parse``) if the module
+    contains any statement other than a class/assignment/annotation/import or a
+    docstring.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt):
+            continue
+        if isinstance(node, _ALLOWED_STMT_TYPES) or _is_docstring_expr(node):
+            continue
+        raise ValueError(
+            "Refusing to write generated types: unexpected "
+            f"{type(node).__name__} node at line {getattr(node, 'lineno', '?')} "
+            "(the module must contain only type declarations)"
         )
-        sys.exit(2)
 
-    spec_path = sys.argv[1]
-    if not Path(spec_path).exists():
-        sys.stderr.write(f"Spec file not found: {spec_path}\n")
-        sys.exit(2)
 
-    spec = json.loads(Path(spec_path).read_text())
+def render_module(spec: dict) -> str:
+    """Render (and validate) the type-only module source for ``spec``.
+
+    Raises ``ValueError``/``SyntaxError`` via ``_assert_types_only`` if the
+    generated source would contain anything other than type declarations.
+    """
     schemas = spec.get("components", {}).get("schemas", {})
     raw_version = str(spec.get("info", {}).get("version", "unknown"))
     version = raw_version if _VERSION_RE.match(raw_version) else "unknown"
@@ -182,6 +228,31 @@ def main():
 
     output = header + body + "\n"
 
+    # Abort before writing if anything executable slipped through.
+    _assert_types_only(output)
+    return output
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write(
+            "Usage: python scripts/generate_types_from_spec.py <openapi-developer.json>\n"
+        )
+        sys.exit(2)
+
+    spec_path = sys.argv[1]
+    if not Path(spec_path).exists():
+        sys.stderr.write(f"Spec file not found: {spec_path}\n")
+        sys.exit(2)
+
+    spec = json.loads(Path(spec_path).read_text())
+
+    try:
+        output = render_module(spec)
+    except (ValueError, SyntaxError) as exc:
+        sys.stderr.write(f"Aborting: generated module failed validation: {exc}\n")
+        sys.exit(1)
+
     out_dir = Path(__file__).parent.parent / "promptguard" / "generated"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "api_types.py"
@@ -191,8 +262,8 @@ def main():
     if not init_path.exists():
         init_path.write_text("")
 
-    count = len(valid_schemas)
-    sys.stderr.write(f"Generated {count} types → {out_path}\n")
+    schema_count = len(spec.get("components", {}).get("schemas", {}))
+    sys.stderr.write(f"Generated types from {schema_count} schemas → {out_path}\n")
 
 
 if __name__ == "__main__":
