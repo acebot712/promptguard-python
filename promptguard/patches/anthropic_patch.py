@@ -25,6 +25,30 @@ _patched = False
 # ---------------------------------------------------------------------------
 
 
+def _system_to_text(system: Any) -> str | None:
+    """Return the guard-message text for ``system``, or ``None`` if it yields
+    no message.
+
+    This is the single source of truth for "does ``system`` produce a guard
+    message" — used by both extraction and redaction so their indices stay in
+    lockstep (a truthy-but-empty ``system`` must not shift the offset).
+    """
+    if not system:
+        return None
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        text_parts = []
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif hasattr(block, "text"):
+                text_parts.append(block.text)
+        if text_parts:
+            return "\n".join(text_parts)
+    return None
+
+
 def _messages_to_guard_format(
     messages: Any,
     system: Any = None,
@@ -36,18 +60,9 @@ def _messages_to_guard_format(
     """
     result: list[dict[str, str]] = []
 
-    if system:
-        if isinstance(system, str):
-            result.append({"role": "system", "content": system})
-        elif isinstance(system, list):
-            text_parts = []
-            for block in system:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif hasattr(block, "text"):
-                    text_parts.append(block.text)
-            if text_parts:
-                result.append({"role": "system", "content": "\n".join(text_parts)})
+    system_text = _system_to_text(system)
+    if system_text is not None:
+        result.append({"role": "system", "content": system_text})
 
     if not messages:
         return result
@@ -82,7 +97,9 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
     new_kwargs: dict = dict(kwargs)
     system = new_kwargs.get("system")
     messages = new_kwargs.get("messages")
-    has_system = system is not None
+    # Use the exact same predicate as extraction so the message index offset
+    # matches the redacted_messages list.
+    has_system = _system_to_text(system) is not None
     offset = 1 if has_system else 0
 
     if has_system and redacted:

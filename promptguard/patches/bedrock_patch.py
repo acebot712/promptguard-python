@@ -109,6 +109,101 @@ def _extract_messages_from_body(body: Any, model_id: str = "") -> list[dict[str,
     return []
 
 
+def _system_produces_message(system: Any) -> bool:
+    """Whether ``_extract_system`` would emit a guard message for ``system``.
+
+    Kept in lockstep with ``_extract_system`` so redaction offsets line up.
+    """
+    if not system:
+        return False
+    if isinstance(system, str):
+        return True
+    if isinstance(system, list):
+        return any(isinstance(b, dict) and "text" in b for b in system)
+    return False
+
+
+def _apply_redaction(args: tuple, kwargs: dict, redacted: list[dict[str, str]]) -> dict:
+    """Write redacted content back into the Bedrock request.
+
+    ``api_params`` is passed positionally (``_make_api_call(self, op, params)``)
+    so we mutate it in place — that same dict object is what the wrapped
+    original call receives.  Returns ``kwargs`` unchanged.
+    """
+    if len(args) < 3 or not redacted:
+        return kwargs
+
+    operation_name = args[1]
+    api_params = args[2]
+    if not isinstance(api_params, dict):
+        return kwargs
+
+    if operation_name == "InvokeModel":
+        _redact_invoke_body(api_params, redacted)
+    else:
+        _redact_converse_params(api_params, redacted)
+    return kwargs
+
+
+def _redact_invoke_body(api_params: dict, redacted: list[dict[str, str]]) -> None:
+    raw = api_params.get("body", b"")
+    was_bytes = isinstance(raw, bytes | bytearray)
+    body: Any = raw
+    if was_bytes:
+        try:
+            body = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+    elif isinstance(raw, str):
+        try:
+            body = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            # A bare string prompt maps to a single guard message.
+            if redacted:
+                api_params["body"] = redacted[0]["content"]
+            return
+    if not isinstance(body, dict):
+        return
+
+    _redact_body_dict(body, redacted, system_key="system")
+    api_params["body"] = json.dumps(body).encode() if was_bytes else json.dumps(body)
+
+
+def _redact_converse_params(api_params: dict, redacted: list[dict[str, str]]) -> None:
+    # Converse passes Messages/System directly on api_params.
+    system_key = "System" if "System" in api_params else "system"
+    _redact_body_dict(api_params, redacted, system_key=system_key, messages_key="Messages")
+
+
+def _redact_body_dict(
+    body: dict,
+    redacted: list[dict[str, str]],
+    system_key: str,
+    messages_key: str = "messages",
+) -> None:
+    offset = 0
+    system = body.get(system_key)
+    if _system_produces_message(system) and redacted:
+        body[system_key] = redacted[0]["content"]
+        offset = 1
+
+    messages = body.get(messages_key)
+    if isinstance(messages, list):
+        for i, msg in enumerate(messages):
+            idx = i + offset
+            if idx < len(redacted) and isinstance(msg, dict):
+                msg["content"] = redacted[idx]["content"]
+        return
+
+    # Single-field prompt formats (Titan inputText / Llama/Mistral prompt).
+    if "inputText" in body and redacted:
+        body["inputText"] = (
+            redacted[offset]["content"] if offset < len(redacted) else body["inputText"]
+        )
+    elif "prompt" in body and redacted:
+        body["prompt"] = redacted[offset]["content"] if offset < len(redacted) else body["prompt"]
+
+
 def _extract_system(system: Any, result: list[dict[str, str]]) -> None:
     if not system:
         return
@@ -155,6 +250,7 @@ def apply() -> bool:
             _original_api_call,
             _extract_guard_messages,
             lambda _: None,
+            apply_redaction=_apply_redaction,
             should_intercept=_should_intercept,
         )
         _patched = True

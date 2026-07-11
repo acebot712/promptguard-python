@@ -110,6 +110,14 @@ def _extract_response_text(response: Any) -> str | None:
 # -- Apply / revert ----------------------------------------------------------
 
 
+# NOTE: No ``apply_redaction`` is supplied for the Google patch on purpose.
+# ``GenerativeModel.generate_content(self, contents, ...)`` is almost always
+# called with ``contents`` as a positional argument (often an immutable
+# string), which the kwargs-only redaction contract in ``_base.wrap_sync``
+# cannot rewrite safely.  Without a handler, ``_base`` fails safe by blocking
+# a ``redact`` decision in enforce mode rather than forwarding unredacted PII.
+
+
 def apply() -> bool:
     global _original_sync_generate, _original_async_generate, _patched
 

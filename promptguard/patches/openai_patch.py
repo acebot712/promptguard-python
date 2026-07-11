@@ -57,16 +57,21 @@ def _messages_to_guard_format(messages: Any) -> list[dict[str, str]]:
 
 
 def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, dict[str, Any]]:
-    """Extract messages and model from OpenAI create() call signature."""
-    messages = kwargs.get("messages") or (args[1] if len(args) > 1 else None)
-    model = kwargs.get("model") or (args[0] if args else None)
+    """Extract messages and model from OpenAI create() call signature.
+
+    ``Completions.create`` is patched as an unbound method and takes
+    ``messages`` / ``model`` as keyword-only arguments, so positional args are
+    never the payload (``args[0]`` is ``self``).  Read from kwargs only.
+    """
+    messages = kwargs.get("messages")
+    model = kwargs.get("model")
     guard_messages = _messages_to_guard_format(messages) if messages else []
     return guard_messages, str(model) if model else None, {"framework": "openai"}
 
 
 def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
     """Apply redacted content back into kwargs."""
-    messages = kwargs.get("messages") or (args[1] if len(args) > 1 else None)
+    messages = kwargs.get("messages")
     if not messages or not redacted:
         new_kwargs: dict = dict(kwargs)
         return new_kwargs

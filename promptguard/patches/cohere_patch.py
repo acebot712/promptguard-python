@@ -74,6 +74,54 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
     return guard_messages, str(model) if model else "cohere", {"framework": "cohere"}
 
 
+def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
+    """Write redacted content back into Cohere chat kwargs.
+
+    Mirrors the extraction order in ``_to_guard_messages``:
+    - ``messages`` (v2) takes precedence and maps 1:1 by index; or
+    - ``chat_history`` entries first, then the trailing ``message`` string.
+
+    Non-dict history/message objects are left untouched (same best-effort
+    behaviour as the OpenAI/Anthropic patches).
+    """
+    new_kwargs: dict = dict(kwargs)
+    if not redacted:
+        return new_kwargs
+
+    messages = new_kwargs.get("messages")
+    if messages:
+        rebuilt: list = []
+        for i, msg in enumerate(messages):
+            if i < len(redacted) and isinstance(msg, dict):
+                new_msg = dict(msg)
+                new_msg["content"] = redacted[i]["content"]
+                rebuilt.append(new_msg)
+            else:
+                rebuilt.append(msg)
+        new_kwargs["messages"] = rebuilt
+        return new_kwargs
+
+    idx = 0
+    chat_history = new_kwargs.get("chat_history")
+    if chat_history:
+        rebuilt = []
+        for i, msg in enumerate(chat_history):
+            if i < len(redacted) and isinstance(msg, dict):
+                new_msg = dict(msg)
+                key = "message" if "message" in new_msg else "content"
+                new_msg[key] = redacted[i]["content"]
+                rebuilt.append(new_msg)
+            else:
+                rebuilt.append(msg)
+        new_kwargs["chat_history"] = rebuilt
+        idx = len(chat_history)
+
+    if new_kwargs.get("message") is not None and idx < len(redacted):
+        new_kwargs["message"] = redacted[idx]["content"]
+
+    return new_kwargs
+
+
 def _extract_response_text(response: Any) -> str | None:
     try:
         if hasattr(response, "text"):
@@ -124,7 +172,12 @@ def apply() -> bool:
             key = f"{cls_name}.chat"
             _originals[key] = cls.chat
             wrap_fn = wrap_async if is_async else wrap_sync
-            cls.chat = wrap_fn(cls.chat, _extract_messages, _extract_response_text)
+            cls.chat = wrap_fn(
+                cls.chat,
+                _extract_messages,
+                _extract_response_text,
+                _apply_redaction,
+            )
             patched_any = True
         except (AttributeError, TypeError):
             pass

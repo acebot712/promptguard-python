@@ -49,9 +49,21 @@ def _handle_pre_scan_decision(
         )
 
     if decision.redacted and decision.redacted_messages:
-        if get_mode() == "enforce" and apply_redaction:
-            redacted: dict = apply_redaction(args, kwargs, decision.redacted_messages)
-            return redacted
+        if get_mode() == "enforce":
+            if apply_redaction is not None:
+                redacted: dict = apply_redaction(args, kwargs, decision.redacted_messages)
+                return redacted
+            # Fail safe: enforce mode requires redaction but this SDK has no
+            # redaction handler.  Forwarding the ORIGINAL (unredacted) content
+            # would leak the exact PII the guard flagged, so we block instead.
+            logger.error(
+                "PromptGuard: redaction required but no redaction handler is "
+                "available for this SDK; blocking the request to avoid "
+                "forwarding unredacted content (threat=%s, event=%s)",
+                decision.threat_type,
+                decision.event_id,
+            )
+            raise PromptGuardBlockedError(decision)
         logger.warning(
             "[monitor] PromptGuard would redact: %s (event=%s)",
             decision.threat_type,
