@@ -170,9 +170,18 @@ def _redact_invoke_body(api_params: dict, redacted: list[dict[str, str]]) -> Non
 
 
 def _redact_converse_params(api_params: dict, redacted: list[dict[str, str]]) -> None:
-    # Converse passes Messages/System directly on api_params.
+    # Converse passes messages/system directly on api_params.  Real botocore
+    # uses lowercase keys (``messages`` / ``system``); older/hand-rolled callers
+    # sometimes use the capitalized forms, so prefer those only when present.
     system_key = "System" if "System" in api_params else "system"
-    _redact_body_dict(api_params, redacted, system_key=system_key, messages_key="Messages")
+    messages_key = "Messages" if "Messages" in api_params else "messages"
+    _redact_body_dict(
+        api_params,
+        redacted,
+        system_key=system_key,
+        messages_key=messages_key,
+        block_shaped=True,
+    )
 
 
 def _redact_body_dict(
@@ -180,11 +189,17 @@ def _redact_body_dict(
     redacted: list[dict[str, str]],
     system_key: str,
     messages_key: str = "messages",
+    block_shaped: bool = False,
 ) -> None:
+    # Converse requires content/system as block lists (``[{"text": ...}]``);
+    # InvokeModel provider bodies (Anthropic/Titan/Llama) take plain strings.
+    def _fmt(content: str) -> Any:
+        return [{"text": content}] if block_shaped else content
+
     offset = 0
     system = body.get(system_key)
     if _system_produces_message(system) and redacted:
-        body[system_key] = redacted[0]["content"]
+        body[system_key] = _fmt(redacted[0]["content"])
         offset = 1
 
     messages = body.get(messages_key)
@@ -192,7 +207,7 @@ def _redact_body_dict(
         for i, msg in enumerate(messages):
             idx = i + offset
             if idx < len(redacted) and isinstance(msg, dict):
-                msg["content"] = redacted[idx]["content"]
+                msg["content"] = _fmt(redacted[idx]["content"])
         return
 
     # Single-field prompt formats (Titan inputText / Llama/Mistral prompt).

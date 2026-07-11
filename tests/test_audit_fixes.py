@@ -68,6 +68,18 @@ class TestConfig:
     def test_repr_masks_short_key(self):
         assert "***" in repr(Config(api_key="short"))
 
+    def test_repr_masks_medium_key_fully(self):
+        # A 12-char key is not long enough to reveal a prefix/suffix.
+        text = repr(Config(api_key="pg_live_1234"))  # 12 chars
+        assert "***" in text
+        assert "pg_liv" not in text
+
+    def test_repr_reveals_only_long_key(self):
+        # 13 chars → prefix/suffix shown.
+        text = repr(Config(api_key="pg_live_12345"))
+        assert "pg_liv" in text
+        assert "…" in text
+
     def test_post_init_clamps_negative(self):
         c = Config(api_key="x", max_retries=-4, retry_delay=-2.0, timeout=-1.0)
         assert c.max_retries == 0
@@ -94,6 +106,43 @@ class TestConfigPathNormalization:
         cfg = Config(api_key="pg_test", timeout=7.0)
         pg = PromptGuard(config=cfg)
         assert pg._http.timeout.read == 7.0
+
+    def test_caller_config_not_mutated(self):
+        cfg = Config(api_key="pg_test", base_url="https://api.promptguard.co/api/v1")
+        original_base = cfg.base_url
+        pg = PromptGuard(config=cfg)
+        # The caller's Config object is left untouched; the client holds a copy.
+        assert cfg.base_url == original_base
+        assert pg.config is not cfg
+        assert pg.config.base_url.endswith("/proxy")
+
+
+class TestPathParamEncoding:
+    def test_agent_stats_path_is_encoded(self):
+        captured = {}
+
+        class _Rec:
+            def _request(self, method, path, **kwargs):
+                captured["path"] = path
+                return {}
+
+        from promptguard.client import Agent
+
+        Agent(_Rec()).stats("weird/../id space")
+        assert captured["path"] == "/agent/weird%2F..%2Fid%20space/stats"
+
+    def test_redteam_test_name_is_encoded(self):
+        captured = {}
+
+        class _Rec:
+            def _request(self, method, path, **kwargs):
+                captured["path"] = path
+                return {}
+
+        from promptguard.client import RedTeam
+
+        RedTeam(_Rec()).run_test("a/b c")
+        assert captured["path"] == "/internal/redteam/test/a%2Fb%20c"
 
 
 # ── Bedrock redaction ─────────────────────────────────────────────────────
@@ -134,12 +183,40 @@ class TestBedrockRedaction:
     def test_converse_params_redacted(self):
         from promptguard.patches.bedrock_patch import _apply_redaction
 
+        # Real botocore Converse uses lowercase "messages" with block-shaped
+        # content ([{"text": ...}]); redaction must write the same shape back.
         api_params = {
-            "Messages": [{"role": "user", "content": "leak"}],
+            "messages": [{"role": "user", "content": [{"text": "leak"}]}],
         }
         redacted = [{"role": "user", "content": "clean"}]
         _apply_redaction((object(), "Converse", api_params), {}, redacted)
-        assert api_params["Messages"][0]["content"] == "clean"
+        assert api_params["messages"][0]["content"] == [{"text": "clean"}]
+
+    def test_converse_params_system_block_shaped(self):
+        from promptguard.patches.bedrock_patch import _apply_redaction
+
+        api_params = {
+            "system": [{"text": "orig sys"}],
+            "messages": [{"role": "user", "content": [{"text": "orig user"}]}],
+        }
+        redacted = [
+            {"role": "system", "content": "clean sys"},
+            {"role": "user", "content": "clean user"},
+        ]
+        _apply_redaction((object(), "Converse", api_params), {}, redacted)
+        assert api_params["system"] == [{"text": "clean sys"}]
+        assert api_params["messages"][0]["content"] == [{"text": "clean user"}]
+
+    def test_converse_params_capitalized_messages_fallback(self):
+        from promptguard.patches.bedrock_patch import _apply_redaction
+
+        # Legacy capitalized "Messages" key is still handled (block-shaped).
+        api_params = {
+            "Messages": [{"role": "user", "content": [{"text": "leak"}]}],
+        }
+        redacted = [{"role": "user", "content": "clean"}]
+        _apply_redaction((object(), "Converse", api_params), {}, redacted)
+        assert api_params["Messages"][0]["content"] == [{"text": "clean"}]
 
     def test_titan_input_text_redacted(self):
         from promptguard.patches.bedrock_patch import _apply_redaction

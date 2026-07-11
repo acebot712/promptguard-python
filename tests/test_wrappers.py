@@ -16,10 +16,17 @@ from promptguard.patches._base import wrap_async, wrap_sync
 class StubGuard:
     """Minimal guard client stub with programmable scan results."""
 
-    def __init__(self, input_decision=None, output_decision=None, input_error=None):
+    def __init__(
+        self,
+        input_decision=None,
+        output_decision=None,
+        input_error=None,
+        output_error=None,
+    ):
         self.input_decision = input_decision
         self.output_decision = output_decision
         self.input_error = input_error
+        self.output_error = output_error
         self.directions: list[str] = []
 
     def scan(self, messages, direction="input", model=None, context=None):
@@ -28,6 +35,8 @@ class StubGuard:
             if self.input_error is not None:
                 raise self.input_error
             return self.input_decision
+        if self.output_error is not None:
+            raise self.output_error
         return self.output_decision
 
     async def scan_async(self, messages, direction="input", model=None, context=None):
@@ -188,6 +197,32 @@ class TestWrapSync:
         assert wrapped(messages=[{"role": "user", "content": "hi"}]) == {"text": "fine"}
         assert "output" in guard.directions
 
+    def test_response_scan_api_error_fail_open_allows(self, guard_env):
+        """A guard outage during response scanning honors fail_open=True."""
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_error=GuardApiError("down", 503),
+            ),
+            scan_responses=True,
+            fail_open=True,
+        )
+        wrapped = wrap_sync(lambda **k: {"text": "resp"}, _extract_messages, _extract_response)
+        assert wrapped(messages=[{"role": "user", "content": "hi"}]) == {"text": "resp"}
+
+    def test_response_scan_api_error_fail_closed_raises(self, guard_env):
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_error=GuardApiError("down", 503),
+            ),
+            scan_responses=True,
+            fail_open=False,
+        )
+        wrapped = wrap_sync(lambda **k: {"text": "resp"}, _extract_messages, _extract_response)
+        with pytest.raises(GuardApiError):
+            wrapped(messages=[{"role": "user", "content": "hi"}])
+
     def test_should_intercept_false_skips_scan(self, guard_env):
         guard = guard_env(StubGuard(input_decision=_decision("block")))
         wrapped = wrap_sync(
@@ -269,6 +304,41 @@ class TestWrapAsync:
 
         async def original(**kwargs):
             return "allowed"
+
+        wrapped = wrap_async(original, _extract_messages, _extract_response)
+        with pytest.raises(GuardApiError):
+            await wrapped(messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
+    async def test_response_scan_api_error_fail_open_allows(self, guard_env):
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_error=GuardApiError("down", 503),
+            ),
+            scan_responses=True,
+            fail_open=True,
+        )
+
+        async def original(**kwargs):
+            return {"text": "resp"}
+
+        wrapped = wrap_async(original, _extract_messages, _extract_response)
+        assert await wrapped(messages=[{"role": "user", "content": "hi"}]) == {"text": "resp"}
+
+    @pytest.mark.asyncio
+    async def test_response_scan_api_error_fail_closed_raises(self, guard_env):
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_error=GuardApiError("down", 503),
+            ),
+            scan_responses=True,
+            fail_open=False,
+        )
+
+        async def original(**kwargs):
+            return {"text": "resp"}
 
         wrapped = wrap_async(original, _extract_messages, _extract_response)
         with pytest.raises(GuardApiError):

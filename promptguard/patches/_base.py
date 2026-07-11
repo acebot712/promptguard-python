@@ -74,9 +74,21 @@ def _handle_pre_scan_decision(
 
 
 def _handle_response_block(resp_decision: Any, get_mode: Callable[[], str]) -> None:
-    """Raise if a response scan decision blocks in enforce mode."""
-    if resp_decision.blocked and get_mode() == "enforce":
+    """Raise if a response scan decision blocks in enforce mode.
+
+    In monitor mode we log a symmetric warning (mirroring the input path) so a
+    blocked *output* is still visible in shadow mode rather than silently
+    passing through.
+    """
+    if not resp_decision.blocked:
+        return
+    if get_mode() == "enforce":
         raise PromptGuardBlockedError(resp_decision)
+    logger.warning(
+        "[monitor] PromptGuard would block response: %s (event=%s)",
+        resp_decision.threat_type,
+        resp_decision.event_id,
+    )
 
 
 # -- Public wrappers ---------------------------------------------------------
@@ -147,8 +159,16 @@ def wrap_sync(
                         model=model,
                     )
                     _handle_response_block(resp_decision, get_mode)
-            except (PromptGuardBlockedError, GuardApiError):
+            except PromptGuardBlockedError:
                 raise
+            except GuardApiError:
+                # Mirror the input path: a guard outage during response scanning
+                # honors fail_open instead of unconditionally re-raising.
+                if not is_fail_open():
+                    raise
+                logger.warning(
+                    "Guard API unavailable during response scan, allowing (fail_open=True)"
+                )
             except Exception:
                 logger.debug("Response scanning failed", exc_info=True)
 
@@ -207,8 +227,16 @@ def wrap_async(
                         model=model,
                     )
                     _handle_response_block(resp_decision, get_mode)
-            except (PromptGuardBlockedError, GuardApiError):
+            except PromptGuardBlockedError:
                 raise
+            except GuardApiError:
+                # Mirror the input path: a guard outage during response scanning
+                # honors fail_open instead of unconditionally re-raising.
+                if not is_fail_open():
+                    raise
+                logger.warning(
+                    "Guard API unavailable during response scan, allowing (fail_open=True)"
+                )
             except Exception:
                 logger.debug("Response scanning failed", exc_info=True)
 
