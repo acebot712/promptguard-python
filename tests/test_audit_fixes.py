@@ -599,6 +599,40 @@ class TestCohereRedaction:
 
         assert _apply_redaction((), {}, [{"role": "user", "content": "clean"}]) is None
 
+    def test_v1_preamble_consumes_first_redacted_index(self):
+        """The scanned preamble is guard index 0; history and message shift
+        by one — redaction must mirror that exactly."""
+        from promptguard.patches.cohere_patch import _apply_redaction, _to_guard_messages
+
+        kwargs = {
+            "preamble": "sys leak",
+            "chat_history": [{"role": "user", "message": "old leak"}],
+            "message": "new leak",
+        }
+        guard_messages = _to_guard_messages(
+            message=kwargs["message"],
+            chat_history=kwargs["chat_history"],
+            preamble=kwargs["preamble"],
+        )
+        assert len(guard_messages) == 3
+
+        redacted = [
+            {"role": "system", "content": "sys clean"},
+            {"role": "user", "content": "old clean"},
+            {"role": "user", "content": "new clean"},
+        ]
+        out = _apply_redaction((), kwargs, redacted)
+        assert out["preamble"] == "sys clean"
+        assert out["chat_history"][0]["message"] == "old clean"
+        assert out["message"] == "new clean"
+
+    def test_v1_preamble_only_redacted(self):
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        kwargs = {"preamble": "sys leak"}
+        out = _apply_redaction((), kwargs, [{"role": "system", "content": "sys clean"}])
+        assert out == {"preamble": "sys clean"}
+
 
 # ── OpenAI / Anthropic object-message redaction ───────────────────────────
 

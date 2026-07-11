@@ -49,6 +49,52 @@ def _system_to_text(system: Any) -> str | None:
     return None
 
 
+def _tool_result_to_text(content: Any) -> str:
+    """Flatten the ``content`` field of a ``tool_result`` block to text.
+
+    Tool results are the canonical indirect prompt-injection channel (text a
+    tool fetched from the outside world), so they MUST be scanned.  The field
+    is either a plain string or a list of content blocks (text/image); only
+    text carries scannable content.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif hasattr(block, "text"):
+                parts.append(str(block.text))
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+def _flatten_content_blocks(content: Any) -> str:
+    """Flatten an Anthropic content-block list to scannable text.
+
+    Includes ``text`` blocks and the text inside ``tool_result`` blocks.
+    The whole list still collapses into ONE guard message, so redaction
+    indices are unaffected by how many blocks a message contains.
+    """
+    text_parts = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif block.get("type") == "tool_result":
+                tool_text = _tool_result_to_text(block.get("content"))
+                if tool_text:
+                    text_parts.append(tool_text)
+        elif getattr(block, "type", None) == "tool_result":
+            tool_text = _tool_result_to_text(getattr(block, "content", None))
+            if tool_text:
+                text_parts.append(tool_text)
+        elif hasattr(block, "text"):
+            text_parts.append(str(block.text))
+    return "\n".join(text_parts)
+
+
 def _messages_to_guard_format(
     messages: Any,
     system: Any = None,
@@ -72,13 +118,7 @@ def _messages_to_guard_format(
         content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
 
         if isinstance(content, list):
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif hasattr(block, "text"):
-                    text_parts.append(block.text)
-            content = "\n".join(text_parts)
+            content = _flatten_content_blocks(content)
 
         result.append({"role": str(role), "content": str(content)})
 

@@ -24,10 +24,24 @@ _patched = False
 # ---------------------------------------------------------------------------
 
 
+def _preamble_to_text(preamble: Any) -> str | None:
+    """Return the guard-message text for a v1 ``preamble``, or ``None``.
+
+    The preamble is Cohere v1's system prompt, so it is scanned as a
+    ``system`` guard message.  Single source of truth for "does ``preamble``
+    produce a guard message" — shared by extraction and redaction so their
+    indices stay aligned (v2 ``messages`` calls never use it).
+    """
+    if isinstance(preamble, str) and preamble:
+        return preamble
+    return None
+
+
 def _to_guard_messages(
     message: Any = None,
     chat_history: Any = None,
     messages: Any = None,
+    preamble: Any = None,
 ) -> list[dict[str, str]]:
     """Convert Cohere chat args to guard API format."""
     result: list[dict[str, str]] = []
@@ -44,6 +58,11 @@ def _to_guard_messages(
             elif hasattr(msg, "role") and hasattr(msg, "content"):
                 result.append({"role": str(msg.role), "content": str(msg.content or "")})
         return result
+
+    # v1 surface: preamble (system prompt) first, then history, then message.
+    preamble_text = _preamble_to_text(preamble)
+    if preamble_text is not None:
+        result.append({"role": "system", "content": preamble_text})
 
     if chat_history:
         for msg in chat_history:
@@ -69,6 +88,7 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
         message=kwargs.get("message"),
         chat_history=kwargs.get("chat_history"),
         messages=kwargs.get("messages"),
+        preamble=kwargs.get("preamble"),
     )
     model = kwargs.get("model")
     return guard_messages, str(model) if model else "cohere", {"framework": "cohere"}
@@ -91,7 +111,8 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | Non
 
     Mirrors the extraction order in ``_to_guard_messages``:
     - ``messages`` (v2) takes precedence; or
-    - ``chat_history`` entries first, then the trailing ``message`` string.
+    - ``preamble`` (v1 system prompt) first, then ``chat_history`` entries,
+      then the trailing ``message`` string.
 
     Only entries that emitted a guard message consume a redacted message, so
     the indices stay aligned with extraction.  Attribute-based message
@@ -130,6 +151,14 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | Non
         return new_kwargs
 
     guard_idx = 0
+    rewrote_any = False
+
+    # v1 preamble consumed guard index 0 during extraction.
+    if _preamble_to_text(new_kwargs.get("preamble")) is not None:
+        new_kwargs["preamble"] = redacted[0]["content"]
+        guard_idx = 1
+        rewrote_any = True
+
     chat_history = new_kwargs.get("chat_history")
     if chat_history:
         rebuilt = []
@@ -155,12 +184,15 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | Non
                     return None
                 rebuilt.append(rewritten)
         new_kwargs["chat_history"] = rebuilt
+        rewrote_any = True
 
     if new_kwargs.get("message") is not None:
         if guard_idx >= len(redacted):
             return None
         new_kwargs["message"] = redacted[guard_idx]["content"]
-    elif not chat_history:
+        rewrote_any = True
+
+    if not rewrote_any:
         # No known redactable shape was present.
         return None
 

@@ -60,9 +60,9 @@ response = client.chat.completions.create(
 **Exact patched call surfaces** (sync and async clients where both exist):
 
 - `openai`: `chat.completions.create()`, `chat.completions.parse()` (when the installed SDK exposes it), and `responses.create()` (when the installed SDK ships the Responses API). The Responses patch scans the `instructions` param plus string or message-item `input` forms; exotic input items (function-call outputs, reasoning items) are not scanned.
-- `anthropic`: `messages.create()` (including the separate `system` param).
+- `anthropic`: `messages.create()` (including the separate `system` param). Text and `tool_result` content blocks are scanned (tool results are the canonical indirect-injection channel); other block types (images, `tool_use` inputs, thinking) are not.
 - `google-generativeai`: `GenerativeModel.generate_content()` / `generate_content_async()`.
-- `cohere`: `Client.chat()` / `ClientV2.chat()` (v1 `message`/`chat_history` and v2 `messages`).
+- `cohere`: `Client.chat()` / `ClientV2.chat()` (v1 `preamble`/`message`/`chat_history` and v2 `messages`; the v1 `preamble` is scanned as a system message).
 - `boto3` (Bedrock Runtime): `invoke_model` and `converse` (via `_make_api_call`).
 
 Calls outside these surfaces — embeddings, audio, images, batches, fine-tuning, assistants, and other endpoints — are **not** scanned.
