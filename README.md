@@ -293,7 +293,7 @@ pg = PromptGuard(
 )
 ```
 
-Retries use exponential backoff starting from `retry_delay`. Only transient errors (network timeouts, 5xx responses) are retried; client errors (4xx) fail immediately.
+Retries use exponential backoff starting from `retry_delay`. Transient errors are retried: network timeouts, 5xx responses, and 429 rate limits (honoring a `Retry-After` header when present, capped at 60s). Other client errors (4xx) fail immediately, as does a 429 that signals hard quota exhaustion.
 
 ## Embeddings
 

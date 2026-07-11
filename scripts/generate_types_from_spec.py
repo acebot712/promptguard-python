@@ -21,6 +21,10 @@ from pathlib import Path
 # the (remote, untrusted) spec that doesn't match is rejected so it can never
 # be interpolated into generated code as a class name or attribute.
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# A spec ``info.version`` is interpolated into the generated module's header
+# docstring. Restrict it to obviously-safe version characters so a hostile spec
+# can't inject arbitrary text/lines there.
+_VERSION_RE = re.compile(r"^[\w.\-+]+$")
 
 
 def _is_identifier(name: str) -> bool:
@@ -64,7 +68,8 @@ def map_type(prop: dict) -> str:
         types = [map_type(p) for p in prop["anyOf"]]
         return " | ".join(types)
     if "enum" in prop:
-        return " | ".join(_py_str_literal(v) for v in prop["enum"])
+        values = ", ".join(_py_str_literal(v) for v in prop["enum"])
+        return f"Literal[{values}]"
 
     t = prop.get("type", "")
 
@@ -146,7 +151,8 @@ def main():
 
     spec = json.loads(Path(spec_path).read_text())
     schemas = spec.get("components", {}).get("schemas", {})
-    version = spec.get("info", {}).get("version", "unknown")
+    raw_version = str(spec.get("info", {}).get("version", "unknown"))
+    version = raw_version if _VERSION_RE.match(raw_version) else "unknown"
 
     header = textwrap.dedent(f"""\
         \"\"\"

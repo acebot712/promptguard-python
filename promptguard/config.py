@@ -23,7 +23,10 @@ class Config:
 
     def __repr__(self) -> str:
         key = self.api_key or ""
-        masked = f"{key[:6]}…{key[-2:]}" if len(key) > 8 else "***"
+        # Only reveal a prefix/suffix for keys long enough that the shown chars
+        # (6 + 2) are a small fraction; shorter keys are masked entirely so we
+        # never expose most of a short secret.
+        masked = f"{key[:6]}…{key[-2:]}" if len(key) > 12 else "***"
         return (
             f"Config(api_key='{masked}', base_url={self.base_url!r}, "
             f"max_retries={self.max_retries}, retry_delay={self.retry_delay}, "
