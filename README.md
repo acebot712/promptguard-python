@@ -89,6 +89,29 @@ promptguard.init(api_key="pg_live_xxx", fail_open=False)
 promptguard.shutdown()  # Removes all patches, closes connections
 ```
 
+**Verifying instrumentation:**
+
+`init()` logs the SDKs it actually patched at `INFO`. Python's default log level
+is `WARNING`, so enable the `promptguard` logger to see it:
+
+```python
+import logging
+logging.getLogger("promptguard").setLevel(logging.INFO)
+```
+
+You can also assert instrumentation programmatically (e.g. in tests):
+
+```python
+import promptguard
+promptguard.init(api_key="pg_live_xxx")
+
+assert promptguard.is_active()               # a guard client is installed
+assert "openai" in promptguard.patched_sdks()  # the OpenAI SDK was patched
+```
+
+`patched_sdks()` returns only the SDKs importable in the current environment
+(missing packages are silently skipped), and an empty list after `shutdown()`.
+
 ### Option 2: Proxy Mode (Drop-in Replacement)
 
 If you prefer the proxy approach, just swap your client:
@@ -97,13 +120,35 @@ If you prefer the proxy approach, just swap your client:
 # Before
 from openai import OpenAI
 client = OpenAI()
+response = client.chat.completions.create(
+    model="gpt-5-nano",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response.choices[0].message.content)  # attribute access
 
 # After
 from promptguard import PromptGuard
 client = PromptGuard(api_key="pg_live_xxx")
-
-# Your existing code works unchanged!
+response = client.chat.completions.create(
+    model="gpt-5-nano",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response["choices"][0]["message"]["content"])  # dict/subscript access
 ```
+
+**Request calls are identical, but responses differ from the native OpenAI SDK.**
+The proxy client returns **plain OpenAI-compatible dicts** (the raw JSON body),
+not the SDK's typed response objects. So `response.choices[0].message.content`
+becomes `response["choices"][0]["message"]["content"]`. If you need the native
+response objects (`.choices[0].message.content`) preserved, use **Option 1
+auto-instrumentation** instead — it patches the real OpenAI/Anthropic/… client
+in place, so their return types are unchanged and only the pre-flight scan is
+added.
+
+| | Response type | Access pattern |
+|---|---|---|
+| **Option 1** (auto-instrumentation) | native SDK objects (unchanged) | `response.choices[0].message.content` |
+| **Option 2** (proxy `PromptGuard`) | OpenAI-compatible **dicts** | `response["choices"][0]["message"]["content"]` |
 
 ## Framework-Specific Integrations
 
@@ -230,6 +275,16 @@ if result["blocked"]:
     print(f"Threat detected: {result['reason']}")
 ```
 
+> **Two scan surfaces — object vs dict.** There are two ways to scan content and
+> they return **different shapes**:
+>
+> | Call | Returns | Access |
+> |---|---|---|
+> | `GuardClient.scan(...)` (Standalone Guard API) | `GuardDecision` **object** | `decision.blocked`, `decision.threat_type` |
+> | `pg.security.scan(...)` (proxy client) | `SecurityScanResult` **dict** | `result["blocked"]`, `result["reason"]` |
+>
+> Use attribute access for `GuardClient`, subscript access for `pg.security`.
+
 ## PII Redaction
 
 ```python
@@ -240,7 +295,49 @@ print(result["redacted"])
 # Output: "My email is [EMAIL] and SSN is [SSN]"
 ```
 
+## Web Scraping
+
+The proxy client exposes a `scrape` namespace for fetching and extracting page
+content through PromptGuard (responses are plain dicts):
+
+```python
+from promptguard import PromptGuard
+
+pg = PromptGuard(api_key="pg_live_xxx")
+
+# Single URL — returns a dict with the extracted content
+result = pg.scrape.url("https://example.com", render_js=False, extract_text=True)
+
+# Batch
+results = pg.scrape.batch(["https://a.com", "https://b.com"])
+```
+
+## Agent Tool Validation
+
+The `agent` namespace validates individual agent tool calls (arguments) before
+they execute — useful for guarding tool-using agents:
+
+```python
+result = pg.agent.validate_tool(
+    agent_id="support-bot",
+    tool_name="send_email",
+    arguments={"to": "user@example.com", "body": "..."},
+    session_id="sess-123",
+)
+
+# Per-agent stats
+stats = pg.agent.stats("support-bot")
+```
+
+Both `scrape` and `agent` are available on the async client (`PromptGuardAsync`)
+with the same methods.
+
 ## Red Team Testing
+
+> **Preview / internal endpoint.** The `redteam` namespace targets the
+> `/api/v1/proxy/internal/redteam` path. It is a supported but preview-tier
+> surface intended for security testing; availability and response shapes may
+> change ahead of the other proxy namespaces, and access may be gated by plan.
 
 ```python
 from promptguard import PromptGuard
@@ -363,14 +460,21 @@ export PROMPTGUARD_BASE_URL="https://api.promptguard.co/api/v1"
 ## Error Handling
 
 ```python
-from promptguard import PromptGuard, PromptGuardBlockedError
+from promptguard import PromptGuardBlockedError
 
 # Auto-instrumentation
 import promptguard
 promptguard.init(api_key="pg_live_xxx")
 
+# Use your real LLM client as usual — it is patched in place.
+from openai import OpenAI
+client = OpenAI()
+
 try:
-    response = client.chat.completions.create(...)
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
 except PromptGuardBlockedError as e:
     print(f"Blocked: {e.decision.threat_type}")
     print(f"Event ID: {e.decision.event_id}")
