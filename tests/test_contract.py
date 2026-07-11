@@ -59,9 +59,11 @@ class TestGuardDecisionContract:
 
 
 class TestRedactionEnforcementContract:
-    """Drives the central pre-call decision handling (``wrap_sync``) with each
-    contract case: a redact decision with missing/empty/partial
-    redacted_messages must escalate to block in enforce mode."""
+    """Drives the central decision handling (``wrap_sync``) with each contract
+    case.  Input direction: a redact decision with missing/empty/partial
+    redacted_messages must escalate to block in enforce mode.  Output
+    direction (``direction: "output"``, v1.5.1): a redact decision on the LLM
+    response can never be applied and must block in enforce mode."""
 
     def test_all_cases(self, contract, monkeypatch):
         import promptguard.auto as auto
@@ -71,6 +73,7 @@ class TestRedactionEnforcementContract:
         for case in contract["redaction_enforcement"]["cases"]:
             decision = GuardDecision(case["decision"])
             scanned = case["scanned_messages"]
+            direction = case.get("direction", "input")
 
             class StubGuard:
                 def __init__(self, d):
@@ -82,16 +85,9 @@ class TestRedactionEnforcementContract:
             monkeypatch.setattr(auto, "_guard_client", StubGuard(decision))
             monkeypatch.setattr(auto, "_mode", case["mode"])
             monkeypatch.setattr(auto, "_fail_open", True)
-            monkeypatch.setattr(auto, "_scan_responses", False)
+            monkeypatch.setattr(auto, "_scan_responses", direction == "output")
 
             forwarded: dict = {}
-
-            def original(*, forwarded=forwarded, **kwargs):
-                forwarded.update(kwargs)
-                return "ok"
-
-            def extract(args, kwargs, scanned=scanned):
-                return scanned, None, {"framework": "contract"}
 
             applier = None
             if case["has_redaction_applier"]:
@@ -100,6 +96,44 @@ class TestRedactionEnforcementContract:
                     new_kwargs = dict(kwargs)
                     new_kwargs["messages"] = redacted
                     return new_kwargs
+
+            if direction == "output":
+                # Drive the response-scan path: no input messages, the
+                # original returns the scanned assistant content as response.
+                response_text = scanned[0]["content"]
+
+                def original(*, forwarded=forwarded, response_text=response_text, **kwargs):
+                    forwarded.update(kwargs)
+                    return {"text": response_text}
+
+                def extract(args, kwargs):
+                    return [], None, {"framework": "contract"}
+
+                def extract_response(response):
+                    return response.get("text")
+
+                wrapped = wrap_sync(original, extract, extract_response, applier)
+
+                if case["expect"] == "block":
+                    with pytest.raises(PromptGuardBlockedError):
+                        wrapped(messages=scanned)
+                elif case["expect"] == "passthrough":
+                    result = wrapped(messages=scanned)
+                    assert result == {"text": response_text}, (
+                        f"{case['name']}: original response not returned"
+                    )
+                else:  # pragma: no cover - contract drift guard
+                    raise AssertionError(
+                        f"{case['name']}: unknown output expect {case['expect']!r}"
+                    )
+                continue
+
+            def original(*, forwarded=forwarded, **kwargs):
+                forwarded.update(kwargs)
+                return "ok"
+
+            def extract(args, kwargs, scanned=scanned):
+                return scanned, None, {"framework": "contract"}
 
             wrapped = wrap_sync(original, extract, lambda response: None, applier)
 

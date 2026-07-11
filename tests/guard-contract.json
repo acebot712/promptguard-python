@@ -1,6 +1,6 @@
 {
   "_description": "Shared contract tests for PromptGuard SDKs. Both Python and Node SDKs MUST pass all cases in this file. If you add a feature to one SDK, add a test case here first.",
-  "_version": "1.5.0",
+  "_version": "1.5.1",
 
   "guard_decision": {
     "description": "GuardDecision must parse these API response bodies correctly.",
@@ -91,7 +91,7 @@
   },
 
   "redaction_enforcement": {
-    "description": "How the shared patch wrapper must handle a pre-call redact decision (added in v1.5.0, audit round 4 findings 1-2). Each case drives the SDK's central decision handling with `scanned_messages` (the guard messages that were scanned), a `decision` API body, a `mode`, and `has_redaction_applier` (whether the SDK patch supplies a redaction handler for this call shape). `expect` is one of: 'apply' (the redacted contents MUST be forwarded to the wrapped call), 'block' (the SDK's blocked error MUST be raised and the wrapped call MUST NOT run), 'passthrough' (monitor mode only: warn and forward the ORIGINAL content unchanged). A redact decision whose redacted_messages are missing, empty, or SHORTER than the scanned messages cannot be honored and must escalate to block in enforce mode.",
+    "description": "How the shared patch wrapper must handle a redact decision (added in v1.5.0, audit round 4 findings 1-2; `direction` added in v1.5.1, audit round 5 finding 1). Each case drives the SDK's central decision handling with `scanned_messages` (the guard messages that were scanned), a `decision` API body, a `mode`, `has_redaction_applier` (whether the SDK patch supplies a redaction handler for this call shape), and an optional `direction` ('input' when absent). `expect` is one of: 'apply' (the redacted contents MUST be forwarded to the wrapped call), 'block' (the SDK's blocked error MUST be raised; for direction 'input' the wrapped call MUST NOT run, for direction 'output' the error is raised AFTER the wrapped call so the response is never returned to the caller), 'passthrough' (monitor mode only: warn and forward the ORIGINAL content unchanged / return the ORIGINAL response). Input direction: a redact decision whose redacted_messages are missing, empty, or SHORTER than the scanned messages cannot be honored and must escalate to block in enforce mode. Output direction (`direction`: 'output'): the case drives the SDK's response-scan handling (responses scanning enabled, `scanned_messages` is the assistant response that was scanned) — an LLM response cannot be rewritten in flight, so a redact decision on the output must ALWAYS block in enforce mode (even with a full redacted_messages payload and an applier present) and warn+passthrough in monitor mode.",
     "cases": [
       {
         "name": "redact_with_full_payload_applies_in_enforce",
@@ -223,6 +223,41 @@
           "confidence": 0.9,
           "threat_type": "pii",
           "redacted_messages": [{ "role": "user", "content": "My SSN is [REDACTED]" }],
+          "threats": [],
+          "latency_ms": 1.0
+        },
+        "expect": "passthrough"
+      },
+      {
+        "name": "output_redact_blocks_in_enforce",
+        "_comment": "A redact decision on an LLM RESPONSE can never be applied (the response already exists and cannot be rewritten in flight) — enforce mode must raise the blocked error even though redacted_messages is complete and an applier exists (audit round 5, finding 1).",
+        "mode": "enforce",
+        "direction": "output",
+        "has_redaction_applier": true,
+        "scanned_messages": [{ "role": "assistant", "content": "Your SSN is 123-45-6789" }],
+        "decision": {
+          "decision": "redact",
+          "event_id": "evt-re-9",
+          "confidence": 0.9,
+          "threat_type": "pii",
+          "redacted_messages": [{ "role": "assistant", "content": "Your SSN is [REDACTED]" }],
+          "threats": [],
+          "latency_ms": 1.0
+        },
+        "expect": "block"
+      },
+      {
+        "name": "output_redact_passes_through_in_monitor",
+        "mode": "monitor",
+        "direction": "output",
+        "has_redaction_applier": true,
+        "scanned_messages": [{ "role": "assistant", "content": "Your SSN is 123-45-6789" }],
+        "decision": {
+          "decision": "redact",
+          "event_id": "evt-re-10",
+          "confidence": 0.9,
+          "threat_type": "pii",
+          "redacted_messages": [{ "role": "assistant", "content": "Your SSN is [REDACTED]" }],
           "threats": [],
           "latency_ms": 1.0
         },

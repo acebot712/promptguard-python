@@ -132,22 +132,44 @@ def _handle_pre_scan_decision(
     return kwargs
 
 
-def _handle_response_block(resp_decision: Any, get_mode: Callable[[], str]) -> None:
-    """Raise if a response scan decision blocks in enforce mode.
+def _handle_response_decision(resp_decision: Any, get_mode: Callable[[], str]) -> None:
+    """Handle a response (output-direction) scan decision.
 
-    In monitor mode we log a symmetric warning (mirroring the input path) so a
-    blocked *output* is still visible in shadow mode rather than silently
-    passing through.
+    Block: raise in enforce mode; warn in monitor mode (mirroring the input
+    path) so a blocked *output* is still visible in shadow mode rather than
+    silently passing through.
+
+    Redact: an LLM response has already been produced and cannot be rewritten
+    in flight, so a redact decision on the output can never be applied.  In
+    enforce mode we block rather than return the unredacted response; in
+    monitor mode we warn.  (Mirrors the integrations' output-redaction
+    handling, e.g. CrewAI ``_enforce_output_redaction``.)
     """
-    if not resp_decision.blocked:
+    if resp_decision.blocked:
+        if get_mode() == "enforce":
+            raise PromptGuardBlockedError(resp_decision)
+        logger.warning(
+            "[monitor] PromptGuard would block response: %s (event=%s)",
+            resp_decision.threat_type,
+            resp_decision.event_id,
+        )
         return
-    if get_mode() == "enforce":
-        raise PromptGuardBlockedError(resp_decision)
-    logger.warning(
-        "[monitor] PromptGuard would block response: %s (event=%s)",
-        resp_decision.threat_type,
-        resp_decision.event_id,
-    )
+
+    if resp_decision.redacted:
+        if get_mode() == "enforce":
+            logger.error(
+                "PromptGuard: redaction required for the LLM response but a "
+                "response cannot be rewritten in flight; blocking instead of "
+                "returning unredacted content (threat=%s, event=%s)",
+                resp_decision.threat_type,
+                resp_decision.event_id,
+            )
+            raise PromptGuardBlockedError(resp_decision)
+        logger.warning(
+            "[monitor] PromptGuard would redact response: %s (event=%s)",
+            resp_decision.threat_type,
+            resp_decision.event_id,
+        )
 
 
 # -- Public wrappers ---------------------------------------------------------
@@ -221,7 +243,7 @@ def wrap_sync(
                         direction="output",
                         model=model,
                     )
-                    _handle_response_block(resp_decision, get_mode)
+                    _handle_response_decision(resp_decision, get_mode)
             except PromptGuardBlockedError:
                 raise
             except GuardApiError:
@@ -291,7 +313,7 @@ def wrap_async(
                         direction="output",
                         model=model,
                     )
-                    _handle_response_block(resp_decision, get_mode)
+                    _handle_response_decision(resp_decision, get_mode)
             except PromptGuardBlockedError:
                 raise
             except GuardApiError:

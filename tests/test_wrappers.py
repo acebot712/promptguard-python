@@ -293,6 +293,53 @@ class TestWrapSync:
         with pytest.raises(PromptGuardBlockedError):
             wrapped(messages=[{"role": "user", "content": "hi"}])
 
+    def test_response_scan_redact_blocks_in_enforce(self, guard_env):
+        """A redact decision on the RESPONSE cannot be applied (the output
+        already exists and cannot be rewritten in flight) → block instead of
+        returning the unredacted output."""
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_decision=_decision(
+                    "redact",
+                    threat_type="pii",
+                    redacted_messages=[{"role": "assistant", "content": "[REDACTED]"}],
+                ),
+            ),
+            scan_responses=True,
+        )
+        wrapped = wrap_sync(
+            lambda **k: {"text": "Your SSN is 123-45-6789"},
+            _extract_messages,
+            _extract_response,
+            _apply_redaction,
+        )
+        with pytest.raises(PromptGuardBlockedError):
+            wrapped(messages=[{"role": "user", "content": "hi"}])
+
+    def test_response_scan_redact_monitor_warns_and_returns(self, guard_env, caplog):
+        """In monitor mode an output redact must WARN (not silently pass) and
+        return the original response."""
+        import logging
+
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_decision=_decision(
+                    "redact",
+                    threat_type="pii",
+                    redacted_messages=[{"role": "assistant", "content": "[REDACTED]"}],
+                ),
+            ),
+            mode="monitor",
+            scan_responses=True,
+        )
+        wrapped = wrap_sync(lambda **k: {"text": "leak"}, _extract_messages, _extract_response)
+        with caplog.at_level(logging.WARNING, logger="promptguard"):
+            result = wrapped(messages=[{"role": "user", "content": "hi"}])
+        assert result == {"text": "leak"}
+        assert any("would redact response" in r.getMessage() for r in caplog.records)
+
     def test_response_scan_allows_when_clean(self, guard_env):
         guard = guard_env(
             StubGuard(input_decision=_decision("allow"), output_decision=_decision("allow")),
@@ -451,6 +498,53 @@ class TestWrapAsync:
         wrapped = wrap_async(original, _extract_messages, _extract_response)
         with pytest.raises(GuardApiError):
             await wrapped(messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
+    async def test_response_scan_redact_blocks_in_enforce(self, guard_env):
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_decision=_decision(
+                    "redact",
+                    threat_type="pii",
+                    redacted_messages=[{"role": "assistant", "content": "[REDACTED]"}],
+                ),
+            ),
+            scan_responses=True,
+        )
+
+        async def original(**kwargs):
+            return {"text": "Your SSN is 123-45-6789"}
+
+        wrapped = wrap_async(original, _extract_messages, _extract_response, _apply_redaction)
+        with pytest.raises(PromptGuardBlockedError):
+            await wrapped(messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
+    async def test_response_scan_redact_monitor_warns_and_returns(self, guard_env, caplog):
+        import logging
+
+        guard_env(
+            StubGuard(
+                input_decision=_decision("allow"),
+                output_decision=_decision(
+                    "redact",
+                    threat_type="pii",
+                    redacted_messages=[{"role": "assistant", "content": "[REDACTED]"}],
+                ),
+            ),
+            mode="monitor",
+            scan_responses=True,
+        )
+
+        async def original(**kwargs):
+            return {"text": "leak"}
+
+        wrapped = wrap_async(original, _extract_messages, _extract_response)
+        with caplog.at_level(logging.WARNING, logger="promptguard"):
+            result = await wrapped(messages=[{"role": "user", "content": "hi"}])
+        assert result == {"text": "leak"}
+        assert any("would redact response" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_response_scan_api_error_fail_open_allows(self, guard_env):
