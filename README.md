@@ -29,13 +29,13 @@ Get a free API key at [app.promptguard.co](https://app.promptguard.co).
 
 ### Option 1: Auto-Instrumentation (Recommended for Frameworks)
 
-One line secures **every LLM call** in your application, regardless of which framework you use (LangChain, CrewAI, AutoGen, LlamaIndex, Haystack, Semantic Kernel, or direct SDK usage):
+One line secures the LLM calls made through the **patched SDK surfaces listed below**, regardless of which framework sits on top (LangChain, CrewAI, AutoGen, LlamaIndex, Haystack, Semantic Kernel, or direct SDK usage):
 
 ```python
 import promptguard
 promptguard.init(api_key="pg_live_xxx")
 
-# That's it. Every LLM call is now secured.
+# That's it. LLM calls through the patched surfaces below are now secured.
 # Works with ANY framework built on openai, anthropic, google-generativeai, cohere, or boto3.
 
 from openai import OpenAI
@@ -56,6 +56,16 @@ response = client.chat.completions.create(
 | `google-generativeai` | LangChain, LlamaIndex, direct usage |
 | `cohere` | Haystack, LangChain, direct usage |
 | `boto3` (Bedrock) | AWS-native apps (Claude, Titan, Llama on Bedrock) |
+
+**Exact patched call surfaces** (sync and async clients where both exist):
+
+- `openai`: `chat.completions.create()`, `chat.completions.parse()` (when the installed SDK exposes it), and `responses.create()` (when the installed SDK ships the Responses API). The Responses patch scans the `instructions` param plus string or message-item `input` forms; exotic input items (function-call outputs, reasoning items) are not scanned.
+- `anthropic`: `messages.create()` (including the separate `system` param).
+- `google-generativeai`: `GenerativeModel.generate_content()` / `generate_content_async()`.
+- `cohere`: `Client.chat()` / `ClientV2.chat()` (v1 `message`/`chat_history` and v2 `messages`).
+- `boto3` (Bedrock Runtime): `invoke_model` and `converse` (via `_make_api_call`).
+
+Calls outside these surfaces — embeddings, audio, images, batches, fine-tuning, assistants, and other endpoints — are **not** scanned.
 
 **Modes:**
 

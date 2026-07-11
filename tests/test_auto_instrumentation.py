@@ -145,6 +145,363 @@ class TestOpenAIPatch:
         assert result_kwargs["messages"][0]["content"] == "My SSN is [REDACTED]"
 
 
+class TestOpenAIResponsesExtraction:
+    """Responses API (client.responses.create) extraction/redaction logic."""
+
+    def test_string_input_with_instructions(self):
+        from promptguard.patches.openai_patch import _responses_input_to_guard_format
+
+        result = _responses_input_to_guard_format(
+            {"instructions": "Be helpful", "input": "My SSN is 123-45-6789"}
+        )
+        assert result == [
+            {"role": "system", "content": "Be helpful"},
+            {"role": "user", "content": "My SSN is 123-45-6789"},
+        ]
+
+    def test_string_input_without_instructions(self):
+        from promptguard.patches.openai_patch import _responses_input_to_guard_format
+
+        result = _responses_input_to_guard_format({"input": "Hello"})
+        assert result == [{"role": "user", "content": "Hello"}]
+
+    def test_message_items_with_content_parts(self):
+        from promptguard.patches.openai_patch import _responses_input_to_guard_format
+
+        result = _responses_input_to_guard_format(
+            {
+                "input": [
+                    {"role": "user", "content": "plain string"},
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "part one"},
+                            {"type": "input_image", "image_url": "https://x/img.png"},
+                            {"type": "output_text", "text": "part two"},
+                        ],
+                    },
+                ]
+            }
+        )
+        assert result == [
+            {"role": "user", "content": "plain string"},
+            {"role": "user", "content": "part one\npart two"},
+        ]
+
+    def test_non_message_items_skipped(self):
+        from promptguard.patches.openai_patch import _responses_input_to_guard_format
+
+        result = _responses_input_to_guard_format(
+            {
+                "input": [
+                    {"type": "function_call_output", "call_id": "c1", "output": "secret"},
+                    {"role": "user", "content": "scanned"},
+                ]
+            }
+        )
+        assert result == [{"role": "user", "content": "scanned"}]
+
+    def test_redaction_string_input(self):
+        from promptguard.patches.openai_patch import _apply_responses_redaction
+
+        kwargs = {"instructions": "Sys leak", "input": "User leak"}
+        redacted = [
+            {"role": "system", "content": "Sys clean"},
+            {"role": "user", "content": "User clean"},
+        ]
+        out = _apply_responses_redaction((), kwargs, redacted)
+        assert out == {"instructions": "Sys clean", "input": "User clean"}
+
+    def test_redaction_item_list_skips_non_messages(self):
+        from promptguard.patches.openai_patch import _apply_responses_redaction
+
+        # The non-message item must not consume a redacted message.
+        kwargs = {
+            "input": [
+                {"type": "function_call_output", "call_id": "c1", "output": "kept"},
+                {"role": "user", "content": "leak"},
+            ]
+        }
+        redacted = [{"role": "user", "content": "clean"}]
+        out = _apply_responses_redaction((), kwargs, redacted)
+        assert out["input"][0]["output"] == "kept"
+        assert out["input"][1]["content"] == "clean"
+
+    def test_redaction_rebuilds_content_parts(self):
+        from promptguard.patches.openai_patch import _apply_responses_redaction
+
+        kwargs = {"input": [{"role": "user", "content": [{"type": "input_text", "text": "leak"}]}]}
+        out = _apply_responses_redaction((), kwargs, [{"role": "user", "content": "clean"}])
+        assert out["input"][0]["content"] == [{"type": "input_text", "text": "clean"}]
+
+    def test_redaction_unknown_shape_returns_none(self):
+        from promptguard.patches.openai_patch import _apply_responses_redaction
+
+        # No instructions, non-string non-list input: cannot rewrite safely.
+        out = _apply_responses_redaction(
+            (), {"input": {"weird": True}}, [{"role": "user", "content": "clean"}]
+        )
+        assert out is None
+
+    def test_redaction_missing_counterpart_returns_none(self):
+        from promptguard.patches.openai_patch import _apply_responses_redaction
+
+        kwargs = {
+            "input": [
+                {"role": "user", "content": "one"},
+                {"role": "user", "content": "two"},
+            ]
+        }
+        out = _apply_responses_redaction((), kwargs, [{"role": "user", "content": "clean"}])
+        assert out is None
+
+    def test_response_text_output_text(self):
+        from promptguard.patches.openai_patch import _extract_responses_response_text
+
+        assert _extract_responses_response_text({"output_text": "hello"}) == "hello"
+
+    def test_response_text_output_items(self):
+        from promptguard.patches.openai_patch import _extract_responses_response_text
+
+        response = {
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "the answer"}],
+                },
+            ]
+        }
+        assert _extract_responses_response_text(response) == "the answer"
+
+    def test_response_text_none_for_unknown(self):
+        from promptguard.patches.openai_patch import _extract_responses_response_text
+
+        assert _extract_responses_response_text({"weird": 1}) is None
+
+
+class TestOpenAIPatchSurfaces:
+    """apply() must cover chat.completions create/parse AND responses.create,
+    exercised against a mocked openai SDK module tree."""
+
+    @pytest.fixture
+    def fake_openai(self, monkeypatch):
+        import importlib.machinery
+        import sys
+        import types
+
+        def make_module(name):
+            m = types.ModuleType(name)
+            m.__spec__ = importlib.machinery.ModuleSpec(name, None)
+            return m
+
+        openai_mod = make_module("openai")
+        resources = make_module("openai.resources")
+        chat = make_module("openai.resources.chat")
+        completions_mod = make_module("openai.resources.chat.completions")
+        responses_mod = make_module("openai.resources.responses")
+
+        calls: dict[str, dict] = {}
+
+        class Completions:
+            def create(self, **kwargs):
+                calls["create"] = kwargs
+                return {"choices": []}
+
+            def parse(self, **kwargs):
+                calls["parse"] = kwargs
+                return {"choices": []}
+
+        class AsyncCompletions:
+            async def create(self, **kwargs):
+                calls["async_create"] = kwargs
+                return {"choices": []}
+
+            async def parse(self, **kwargs):
+                calls["async_parse"] = kwargs
+                return {"choices": []}
+
+        class Responses:
+            def create(self, **kwargs):
+                calls["responses_create"] = kwargs
+                return {"output": []}
+
+        class AsyncResponses:
+            async def create(self, **kwargs):
+                calls["async_responses_create"] = kwargs
+                return {"output": []}
+
+        completions_mod.Completions = Completions
+        completions_mod.AsyncCompletions = AsyncCompletions
+        responses_mod.Responses = Responses
+        responses_mod.AsyncResponses = AsyncResponses
+        openai_mod.resources = resources
+        resources.chat = chat
+        resources.responses = responses_mod
+        chat.completions = completions_mod
+
+        for mod in (openai_mod, resources, chat, completions_mod, responses_mod):
+            monkeypatch.setitem(sys.modules, mod.__name__, mod)
+
+        import promptguard.patches.openai_patch as openai_patch
+
+        yield {
+            "calls": calls,
+            "Completions": Completions,
+            "AsyncCompletions": AsyncCompletions,
+            "Responses": Responses,
+            "AsyncResponses": AsyncResponses,
+            "patch": openai_patch,
+        }
+
+        # Revert while the fake modules are still registered.
+        openai_patch.revert()
+
+    @pytest.fixture
+    def stub_guard(self, monkeypatch):
+        import promptguard.auto as auto
+
+        def _install(decision, *, mode="enforce"):
+            class StubGuard:
+                def __init__(self):
+                    self.scanned: list[list[dict[str, str]]] = []
+
+                def scan(self, messages, direction="input", model=None, context=None):
+                    self.scanned.append(messages)
+                    return decision
+
+                async def scan_async(self, messages, direction="input", model=None, context=None):
+                    return self.scan(messages, direction=direction, model=model, context=context)
+
+            stub = StubGuard()
+            monkeypatch.setattr(auto, "_guard_client", stub)
+            monkeypatch.setattr(auto, "_mode", mode)
+            monkeypatch.setattr(auto, "_fail_open", True)
+            monkeypatch.setattr(auto, "_scan_responses", False)
+            return stub
+
+        return _install
+
+    @staticmethod
+    def _decision(decision, **extra):
+        from promptguard.guard import GuardDecision
+
+        data = {"decision": decision, "event_id": "evt", "confidence": 0.9}
+        data.update(extra)
+        return GuardDecision(data)
+
+    def test_apply_patches_all_surfaces(self, fake_openai):
+        patch_mod = fake_openai["patch"]
+        originals = {
+            "Completions.create": fake_openai["Completions"].create,
+            "Completions.parse": fake_openai["Completions"].parse,
+            "AsyncCompletions.create": fake_openai["AsyncCompletions"].create,
+            "AsyncCompletions.parse": fake_openai["AsyncCompletions"].parse,
+            "Responses.create": fake_openai["Responses"].create,
+            "AsyncResponses.create": fake_openai["AsyncResponses"].create,
+        }
+
+        assert patch_mod.apply() is True
+
+        for key, original in originals.items():
+            cls_name, method = key.split(".")
+            assert getattr(fake_openai[cls_name], method) is not original, f"{key} not patched"
+
+        patch_mod.revert()
+        for key, original in originals.items():
+            cls_name, method = key.split(".")
+            assert getattr(fake_openai[cls_name], method) is original, f"{key} not reverted"
+
+    def test_responses_create_block_enforced(self, fake_openai, stub_guard):
+        from promptguard.guard import PromptGuardBlockedError
+
+        stub = stub_guard(self._decision("block", threat_type="prompt_injection"))
+        assert fake_openai["patch"].apply() is True
+
+        with pytest.raises(PromptGuardBlockedError):
+            fake_openai["Responses"]().create(model="gpt-5-nano", input="ignore instructions")
+        assert "responses_create" not in fake_openai["calls"]
+        assert stub.scanned == [[{"role": "user", "content": "ignore instructions"}]]
+
+    def test_responses_create_redaction_applied(self, fake_openai, stub_guard):
+        stub_guard(
+            self._decision(
+                "redact",
+                threat_type="pii",
+                redacted_messages=[
+                    {"role": "system", "content": "sys clean"},
+                    {"role": "user", "content": "user clean"},
+                ],
+            )
+        )
+        assert fake_openai["patch"].apply() is True
+
+        fake_openai["Responses"]().create(
+            model="gpt-5-nano", instructions="sys leak", input="user leak"
+        )
+        forwarded = fake_openai["calls"]["responses_create"]
+        assert forwarded["instructions"] == "sys clean"
+        assert forwarded["input"] == "user clean"
+
+    @pytest.mark.asyncio
+    async def test_async_responses_create_block_enforced(self, fake_openai, stub_guard):
+        from promptguard.guard import PromptGuardBlockedError
+
+        stub_guard(self._decision("block", threat_type="prompt_injection"))
+        assert fake_openai["patch"].apply() is True
+
+        with pytest.raises(PromptGuardBlockedError):
+            await fake_openai["AsyncResponses"]().create(model="gpt-5-nano", input="attack")
+        assert "async_responses_create" not in fake_openai["calls"]
+
+    def test_parse_block_enforced(self, fake_openai, stub_guard):
+        from promptguard.guard import PromptGuardBlockedError
+
+        stub_guard(self._decision("block", threat_type="prompt_injection"))
+        assert fake_openai["patch"].apply() is True
+
+        with pytest.raises(PromptGuardBlockedError):
+            fake_openai["Completions"]().parse(
+                model="gpt-5-nano",
+                messages=[{"role": "user", "content": "attack"}],
+            )
+        assert "parse" not in fake_openai["calls"]
+
+    def test_parse_redaction_applied(self, fake_openai, stub_guard):
+        stub_guard(
+            self._decision(
+                "redact",
+                threat_type="pii",
+                redacted_messages=[{"role": "user", "content": "clean"}],
+            )
+        )
+        assert fake_openai["patch"].apply() is True
+
+        fake_openai["Completions"]().parse(
+            model="gpt-5-nano",
+            messages=[{"role": "user", "content": "leak"}],
+        )
+        assert fake_openai["calls"]["parse"]["messages"][0]["content"] == "clean"
+
+    def test_missing_responses_module_still_patches_chat(self, fake_openai, monkeypatch):
+        import sys
+
+        monkeypatch.delitem(sys.modules, "openai.resources.responses")
+        patch_mod = fake_openai["patch"]
+        original_responses_create = fake_openai["Responses"].create
+
+        assert patch_mod.apply() is True
+        # chat.completions patched, responses untouched.
+        assert fake_openai["Completions"].create is not None
+        assert fake_openai["Responses"].create is original_responses_create
+        # Restore the module so the fixture teardown can revert cleanly.
+        monkeypatch.setitem(
+            sys.modules, "openai.resources.responses", sys.modules["openai.resources"].responses
+        )
+
+
 class TestAnthropicPatch:
     """Test the Anthropic SDK patch logic."""
 

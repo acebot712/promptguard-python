@@ -2,15 +2,16 @@
 Auto-instrumentation for PromptGuard.
 
 Call ``promptguard.init()`` once at application startup to automatically
-secure *all* LLM calls made through popular SDKs, regardless of which
-framework (LangChain, CrewAI, AutoGen, LlamaIndex, …) sits on top.
+secure LLM calls made through the patched SDK surfaces (see README
+"Exact patched call surfaces"), regardless of which framework (LangChain,
+CrewAI, AutoGen, LlamaIndex, …) sits on top.
 
 Usage::
 
     import promptguard
     promptguard.init(api_key="pg_live_xxx")  # or set PROMPTGUARD_API_KEY env var
 
-    # Everything below is now secured transparently.
+    # Calls through the patched surfaces are now secured transparently.
     from openai import OpenAI
     client = OpenAI()
     client.chat.completions.create(...)   # ← scanned by PromptGuard
