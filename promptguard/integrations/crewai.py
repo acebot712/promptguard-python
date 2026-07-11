@@ -182,6 +182,13 @@ def secure_tool(
                     direction="input",
                     context=context,
                 )
+            except Exception:
+                if not fail_open:
+                    raise
+                logger.warning("Guard API unavailable, allowing tool run (fail_open=True)")
+                decision = None
+
+            if decision is not None:
                 if decision.blocked:
                     if mode == "enforce":
                         raise PromptGuardBlockedError(decision)
@@ -190,11 +197,25 @@ def secure_tool(
                         tool_name,
                         decision.threat_type,
                     )
-            except PromptGuardBlockedError:
-                raise
-            except Exception:
-                if not fail_open:
-                    raise
+                if decision.redacted:
+                    # A wrapped tool has no safe way to rewrite its own args, so
+                    # in enforce mode we block rather than forward the original
+                    # (unredacted) input — mirroring _base._handle_pre_scan_decision.
+                    if mode == "enforce":
+                        logger.error(
+                            "PromptGuard: redaction required for tool %s but the "
+                            "tool wrapper cannot rewrite input in place; blocking "
+                            "to avoid forwarding unredacted content (threat=%s, event=%s)",
+                            tool_name,
+                            decision.threat_type,
+                            decision.event_id,
+                        )
+                        raise PromptGuardBlockedError(decision)
+                    logger.warning(
+                        "[monitor] PromptGuard would redact tool %s input: %s",
+                        tool_name,
+                        decision.threat_type,
+                    )
 
             return original_run(self, *args, **kwargs)
 

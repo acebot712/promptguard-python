@@ -273,4 +273,19 @@ class PromptGuardCallbackHandler:
             )
 
         if decision.redacted:
-            logger.info("PromptGuard redacted content (event=%s)", decision.event_id)
+            # The callback observes events but cannot rewrite prompts/responses
+            # in flight, so a redact decision can't be applied. In enforce mode
+            # we block rather than forward unredacted content; monitor warns.
+            if self._mode == "enforce":
+                logger.error(
+                    "PromptGuard: redaction required but the LlamaIndex callback "
+                    "cannot rewrite in-flight content; blocking (threat=%s, "
+                    "event=%s, llamaindex_event=%s)",
+                    decision.threat_type,
+                    decision.event_id,
+                    event_id,
+                )
+                raise PromptGuardBlockedError(decision)
+            logger.warning(
+                "[monitor] PromptGuard would redact content (event=%s)", decision.event_id
+            )

@@ -282,8 +282,21 @@ class PromptGuardCallbackHandler:
             )
 
         if decision.redacted:
-            logger.info(
-                "PromptGuard redacted content: %s (event=%s, run=%s)",
+            # The callback observes prompts/responses but cannot rewrite them in
+            # flight, so a redact decision can't be applied. In enforce mode we
+            # block rather than let unredacted content proceed; monitor warns.
+            if self._mode == "enforce":
+                logger.error(
+                    "PromptGuard: redaction required but the LangChain callback "
+                    "cannot rewrite in-flight content; blocking (threat=%s, "
+                    "event=%s, run=%s)",
+                    decision.threat_type,
+                    decision.event_id,
+                    run_id,
+                )
+                raise PromptGuardBlockedError(decision)
+            logger.warning(
+                "[monitor] PromptGuard would redact content: %s (event=%s, run=%s)",
                 decision.threat_type,
                 decision.event_id,
                 run_id,
