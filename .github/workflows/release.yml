@@ -23,9 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
           cache: 'pip'
@@ -33,7 +33,7 @@ jobs:
 
       - name: Lint
         run: |
-          pip install ruff==0.15.4
+          pip install ruff==0.15.20
           ruff check .
           ruff format --check .
 
@@ -58,9 +58,9 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
           cache: 'pip'
@@ -69,17 +69,34 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Version is single-sourced in promptguard/_version.py (hatch reads
+          # it via [tool.hatch.version]); pyproject no longer carries it.
+          # Parse the file directly so we don't import the package (and its
+          # httpx dependency, which isn't installed in this job).
+          VERSION=$(python -c "import re, pathlib; print(re.search(r'__version__\s*=\s*[\"\x27]([^\"\x27]+)', pathlib.Path('promptguard/_version.py').read_text()).group(1))")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check if version exists on PyPI
         id: check
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          if pip index versions promptguard-sdk 2>/dev/null | grep -q "$VERSION"; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+          # `pip index` (experimental) prints a single "Available versions: a, b, c"
+          # line. Parse it into one version per line and match the exact token,
+          # so e.g. 1.9.0 never matches 1.9.01 or 11.9.0. Fail loudly if the
+          # command itself errors rather than silently treating that as "new".
+          if ! AVAILABLE=$(pip index versions promptguard-sdk 2>/dev/null); then
+            echo "pip index versions failed" >&2
+            exit 1
+          fi
+          if printf '%s\n' "$AVAILABLE" \
+            | sed -n 's/.*Available versions: //p' \
+            | tr ',' '\n' \
+            | tr -d '[:space:]' \
+            | grep -qx -- "$VERSION"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build
@@ -90,4 +107,4 @@ jobs:
 
       - name: Publish (Trusted Publishing)
         if: steps.check.outputs.exists == 'false'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
