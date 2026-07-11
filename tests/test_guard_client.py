@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
+from promptguard.guard import (
+    GuardApiError,
+    GuardClient,
+    GuardDecision,
+    PromptGuardBlockedError,
+)
 
 
 class TestGuardDecision:
@@ -47,13 +52,22 @@ class TestGuardDecision:
         assert d.redacted_messages is not None
         assert len(d.redacted_messages) == 1
 
-    def test_defaults_for_missing_fields(self):
-        d = GuardDecision({})
+    def test_defaults_for_missing_optional_fields(self):
+        d = GuardDecision({"decision": "allow"})
         assert d.decision == "allow"
         assert d.confidence == 0.0
         assert d.event_id == ""
         assert d.threat_type is None
         assert d.threats == []
+
+    def test_missing_decision_is_rejected(self):
+        # Contract v1.4.0: malformed/empty bodies must not default to allow.
+        with pytest.raises(GuardApiError):
+            GuardDecision({})
+
+    def test_unknown_decision_is_rejected(self):
+        with pytest.raises(GuardApiError):
+            GuardDecision({"decision": "maybe"})
 
 
 class TestPromptGuardBlockedError:

@@ -32,7 +32,13 @@ class GuardDecision:
     )
 
     def __init__(self, data: dict[str, Any]):
-        self.decision: str = data.get("decision", "allow")
+        decision = data.get("decision")
+        if decision not in ("allow", "block", "redact"):
+            # Contract v1.4.0: a malformed/empty body must NOT silently
+            # default to allow. Raise the API-error type so the caller's
+            # explicit fail-open / fail-closed policy governs instead.
+            raise GuardApiError(f"Guard API returned an unknown decision: {decision!r}")
+        self.decision: str = decision
         self.event_id: str = data.get("event_id", "")
         self.confidence: float = data.get("confidence", 0.0)
         self.threat_type: str | None = data.get("threat_type")
@@ -163,13 +169,12 @@ class GuardClient:
                 f"Guard API returned an unexpected body type: {type(data).__name__}",
                 status_code=resp.status_code,
             )
-        decision = GuardDecision(data)
-        if decision.decision not in ("allow", "block", "redact"):
-            raise GuardApiError(
-                f"Guard API returned an unknown decision: {decision.decision!r}",
-                status_code=resp.status_code,
-            )
-        return decision
+        # GuardDecision itself rejects unknown decisions (contract v1.4.0);
+        # attach the HTTP status for callers that inspect it.
+        try:
+            return GuardDecision(data)
+        except GuardApiError as exc:
+            raise GuardApiError(str(exc), status_code=resp.status_code) from exc
 
     def scan(
         self,

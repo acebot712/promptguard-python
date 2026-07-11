@@ -28,9 +28,16 @@ def contract():
 
 class TestGuardDecisionContract:
     def test_all_cases(self, contract):
-        from promptguard.guard import GuardDecision
+        from promptguard.guard import GuardApiError, GuardDecision
+
+        error_types = {"GuardApiError": GuardApiError}
 
         for case in contract["guard_decision"]["cases"]:
+            if "expect_error" in case:
+                with pytest.raises(error_types[case["expect_error"]]):
+                    GuardDecision(case["input"])
+                continue
+
             decision = GuardDecision(case["input"])
             expect = case["expect"]
 
