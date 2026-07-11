@@ -480,6 +480,27 @@ except PromptGuardBlockedError as e:
     print(f"Event ID: {e.decision.event_id}")
 ```
 
+In **proxy mode**, the client raises `PromptGuardError`, which carries structured
+fields you can branch on — `.code`, `.status_code`, `.upgrade_url`,
+`.current_plan`, `.requests_used`, and `.requests_limit`:
+
+```python
+from promptguard import PromptGuard, PromptGuardError
+
+client = PromptGuard(api_key="pg_live_xxx")
+
+try:
+    response = client.chat.completions.create(
+        model="gpt-5-nano",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+except PromptGuardError as e:
+    if e.code == "monthly_quota_exceeded":
+        print(f"Upgrade: {e.upgrade_url}")
+    else:
+        print(f"{e.code} ({e.status_code}): {e}")
+```
+
 ## Links
 
 - [Documentation](https://docs.promptguard.co)
