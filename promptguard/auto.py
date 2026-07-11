@@ -69,6 +69,10 @@ def init(
     if mode not in ("enforce", "monitor"):
         raise ValueError(f"mode must be 'enforce' or 'monitor', got {mode!r}")
 
+    # Re-initialising must not leak the previous client's HTTP connections.
+    if _guard_client is not None:
+        _guard_client.close()
+
     _guard_client = GuardClient(
         api_key=resolved_key,
         base_url=resolved_url,
