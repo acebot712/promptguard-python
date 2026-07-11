@@ -9,6 +9,7 @@ decision (allow / block / redact).
 import asyncio
 import logging
 import threading
+import weakref
 from typing import Any
 
 import httpx
@@ -83,6 +84,36 @@ class GuardApiError(Exception):
         super().__init__(message)
 
 
+async def _silent_aclose(client: httpx.AsyncClient) -> None:
+    """Await ``client.aclose()``, swallowing any failure (best-effort)."""
+    try:
+        await client.aclose()
+    except Exception:
+        logger.debug("Async Guard client close failed", exc_info=True)
+
+
+def _best_effort_close_orphan(client: httpx.AsyncClient) -> None:
+    """Best-effort close of a client whose event loop is gone.
+
+    Called from ``close()`` and from the ``weakref.finalize`` hook when a
+    loop is garbage-collected.  Runs the aclose on the current loop if one
+    is running here, otherwise on a throwaway loop; failures are swallowed.
+    """
+    if client.is_closed:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    try:
+        if loop is not None and loop.is_running():
+            loop.create_task(_silent_aclose(client))
+        else:
+            asyncio.run(client.aclose())
+    except Exception:
+        logger.debug("Best-effort async Guard client close failed", exc_info=True)
+
+
 class GuardClient:
     """HTTP client for the PromptGuard Guard API.
 
@@ -101,10 +132,15 @@ class GuardClient:
         self._guard_url = f"{base_url.rstrip('/')}/guard"
         self._timeout = timeout
         self._sync_client: httpx.Client | None = None
-        self._async_client: httpx.AsyncClient | None = None
-        # The async client is bound to the event loop it was created on; track
-        # it so we can detect a loop change and rebuild.
-        self._async_loop: asyncio.AbstractEventLoop | None = None
+        # An httpx.AsyncClient is bound to the event loop it was created on,
+        # so keep one client per live loop.  Two loops scanning concurrently
+        # (e.g. threads each running asyncio.run) each get their own client
+        # instead of displacing — and killing in-flight scans of — the other.
+        # Weak keys let a garbage-collected loop drop its entry; the paired
+        # ``weakref.finalize`` best-effort closes the evicted client.
+        self._async_clients: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, httpx.AsyncClient
+        ] = weakref.WeakKeyDictionary()
         self._client_lock = threading.Lock()
 
     def _get_headers(self) -> dict[str, str]:
@@ -125,27 +161,31 @@ class GuardClient:
         return self._sync_client
 
     def _ensure_async_client(self) -> httpx.AsyncClient:
+        """Return the async client bound to the *current* running loop.
+
+        Each live event loop gets its own client (per-loop map), so a scan on
+        loop B never closes a client with in-flight scans on loop A.
+        """
         try:
-            current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            # scan_async() is always awaited inside a loop; anything else is
+            # a caller bug that must not silently build an unbound client.
+            raise GuardApiError("GuardClient async API used outside a running event loop") from exc
         with self._client_lock:
-            # A client bound to a different loop can't be reused. Schedule a
-            # best-effort aclose() on its *original* loop (if still alive) so we
-            # don't leak the connection pool, then rebuild for the new loop.
-            if (
-                self._async_client is not None
-                and current_loop is not None
-                and self._async_loop is not current_loop
-            ):
-                logger.debug("Event loop changed; closing displaced async Guard client")
-                self._schedule_aclose(self._async_client, self._async_loop)
-                self._async_client = None
-                self._async_loop = None
-            if self._async_client is None:
-                self._async_client = httpx.AsyncClient(timeout=self._timeout)
-                self._async_loop = current_loop
-        return self._async_client
+            client = self._async_clients.get(current_loop)
+            if client is None or client.is_closed:
+                client = httpx.AsyncClient(timeout=self._timeout)
+                try:
+                    self._async_clients[current_loop] = client
+                    # Best-effort close when the loop itself is evicted
+                    # (garbage-collected) so its connection pool isn't leaked.
+                    weakref.finalize(current_loop, _best_effort_close_orphan, client)
+                except TypeError:
+                    # Exotic non-weakrefable loop: fall back to an uncached
+                    # client (closed by the httpx finalizer / GC).
+                    logger.debug("Event loop is not weak-referenceable; client not cached")
+        return client
 
     @staticmethod
     def _schedule_aclose(client: httpx.AsyncClient, loop: asyncio.AbstractEventLoop | None) -> None:
@@ -157,10 +197,10 @@ class GuardClient:
         if loop is None or loop.is_closed() or not loop.is_running():
             return
         try:
-            loop.call_soon_threadsafe(lambda: loop.create_task(client.aclose()))
+            loop.call_soon_threadsafe(lambda: loop.create_task(_silent_aclose(client)))
         except RuntimeError:
             # Loop stopped/closed between the check and the schedule.
-            logger.debug("Could not schedule aclose on displaced loop", exc_info=True)
+            logger.debug("Could not schedule aclose on client's loop", exc_info=True)
 
     def _check_response(self, resp: httpx.Response) -> GuardDecision:
         """Validate response status and parse into a GuardDecision.
@@ -244,37 +284,47 @@ class GuardClient:
         return payload
 
     def close(self):
-        """Close the sync client and best-effort close the async client.
+        """Close the sync client and best-effort close all async clients.
 
         Safe to call from sync code (e.g. ``init()`` re-init and
-        ``shutdown()``): the async client is closed on its own loop if one is
-        running, otherwise via a throwaway loop, and any failure is swallowed.
+        ``shutdown()``): each async client is closed on the loop it belongs
+        to if that loop is still running, otherwise via a throwaway loop, and
+        any failure is swallowed.
         """
         if self._sync_client:
             self._sync_client.close()
             self._sync_client = None
-        self._best_effort_close_async()
+        for loop, client in self._drain_async_clients():
+            self._best_effort_close_async(client, loop)
 
-    def _best_effort_close_async(self) -> None:
-        if self._async_client is None:
+    def _drain_async_clients(
+        self,
+    ) -> list[tuple[asyncio.AbstractEventLoop, httpx.AsyncClient]]:
+        """Atomically take ownership of every cached (loop, client) pair."""
+        with self._client_lock:
+            items = list(self._async_clients.items())
+            self._async_clients.clear()
+        return items
+
+    def _best_effort_close_async(
+        self,
+        client: httpx.AsyncClient,
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> None:
+        """Close ``client`` on its own ``loop`` when possible, else orphan-close."""
+        if loop is not None and not loop.is_closed() and loop.is_running():
+            self._schedule_aclose(client, loop)
             return
-        client = self._async_client
-        self._async_client = None
-        self._async_loop = None
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None and loop.is_running():
-            loop.create_task(client.aclose())
-            return
-        try:
-            asyncio.run(client.aclose())
-        except Exception:
-            logger.debug("Best-effort async Guard client close failed", exc_info=True)
+        _best_effort_close_orphan(client)
 
     async def aclose(self):
-        if self._async_client:
-            await self._async_client.aclose()
-            self._async_client = None
-            self._async_loop = None
+        """Async close: awaits the current loop's client, best-effort for others."""
+        try:
+            current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        for loop, client in self._drain_async_clients():
+            if loop is current_loop:
+                await _silent_aclose(client)
+            else:
+                self._best_effort_close_async(client, loop)
