@@ -11,7 +11,9 @@ from promptguard.auto import (
     get_guard_client,
     get_mode,
     init,
+    is_active,
     is_fail_open,
+    patched_sdks,
     should_scan_responses,
     shutdown,
 )
@@ -73,6 +75,27 @@ class TestInit:
         with patch("promptguard.auto._apply_patches"):
             init(api_key="pg_test", scan_responses=True)
         assert should_scan_responses()
+
+    def test_is_active_reflects_lifecycle(self):
+        assert is_active() is False
+        with patch("promptguard.auto._apply_patches"):
+            init(api_key="pg_test")
+        assert is_active() is True
+        with patch("promptguard.auto._remove_patches"):
+            shutdown()
+        assert is_active() is False
+
+    def test_patched_sdks_lists_applied_patches(self):
+        # Patch a single fake SDK so patched_sdks() reports it by NAME.
+        import promptguard.auto as auto
+
+        fake_patch = type("FakePatch", (), {"NAME": "openai"})()
+        with patch.object(auto, "_apply_patches", lambda: auto._applied_patches.append(fake_patch)):
+            init(api_key="pg_test")
+        assert "openai" in patched_sdks()
+
+    def test_patched_sdks_empty_before_init(self):
+        assert patched_sdks() == []
 
 
 class TestShutdown:

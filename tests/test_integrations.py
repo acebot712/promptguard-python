@@ -47,6 +47,20 @@ class TestLangChainCallbackHandler:
         handler = PromptGuardCallbackHandler()
         assert handler._guard is not None
 
+    def test_init_rejects_bad_mode(self):
+        from promptguard.integrations.langchain import PromptGuardCallbackHandler
+
+        with pytest.raises(ValueError, match="mode must be"):
+            PromptGuardCallbackHandler(api_key="pg_test", mode="Enforce")
+
+    def test_langchain_callback_handler_alias(self):
+        from promptguard.integrations.langchain import (
+            LangChainCallbackHandler,
+            PromptGuardCallbackHandler,
+        )
+
+        assert LangChainCallbackHandler is PromptGuardCallbackHandler
+
     @patch.object(GuardClient, "scan")
     def test_on_llm_start_allow(self, mock_scan):
         mock_scan.return_value = GuardDecision({"decision": "allow"})
@@ -197,6 +211,12 @@ class TestCrewAIGuardrail:
 
         with pytest.raises(ValueError, match="API key required"):
             PromptGuardGuardrail(api_key="")
+
+    def test_init_rejects_bad_mode(self):
+        from promptguard.integrations.crewai import PromptGuardGuardrail
+
+        with pytest.raises(ValueError, match="mode must be"):
+            PromptGuardGuardrail(api_key="pg_test", mode="block")
 
     @patch.object(GuardClient, "scan")
     def test_before_kickoff_allow(self, mock_scan):
@@ -386,6 +406,18 @@ class TestCrewAISecureTool:
 
         return MyTool
 
+    def test_secure_tool_rejects_bad_mode(self):
+        from promptguard.integrations.crewai import secure_tool
+
+        with pytest.raises(ValueError, match="mode must be"):
+
+            @secure_tool(api_key="pg_test", mode="ENFORCE")
+            class MyTool:
+                name = "mytool"
+
+                def _run(self, text):
+                    return text
+
     @patch.object(GuardClient, "scan")
     def test_allow_runs_tool(self, mock_scan):
         mock_scan.return_value = GuardDecision({"decision": "allow"})
@@ -433,6 +465,20 @@ class TestLlamaIndexCallbackHandler:
 
         with pytest.raises(ValueError, match="API key required"):
             PromptGuardCallbackHandler(api_key="")
+
+    def test_init_rejects_bad_mode(self):
+        from promptguard.integrations.llamaindex import PromptGuardCallbackHandler
+
+        with pytest.raises(ValueError, match="mode must be"):
+            PromptGuardCallbackHandler(api_key="pg_test", mode="monytor")
+
+    def test_llamaindex_callback_handler_alias(self):
+        from promptguard.integrations.llamaindex import (
+            LlamaIndexCallbackHandler,
+            PromptGuardCallbackHandler,
+        )
+
+        assert LlamaIndexCallbackHandler is PromptGuardCallbackHandler
 
     @patch.object(GuardClient, "scan")
     def test_on_event_start_llm(self, mock_scan):

@@ -96,10 +96,24 @@ class TestPromptGuardBlockedError:
 class TestGuardClient:
     """Test the GuardClient HTTP wrapper."""
 
-    def test_init_defaults(self):
+    def test_init_defaults(self, monkeypatch):
+        monkeypatch.delenv("PROMPTGUARD_BASE_URL", raising=False)
         client = GuardClient(api_key="pg_test_key")
         assert client._api_key == "pg_test_key"
         assert client._guard_url == "https://api.promptguard.co/api/v1/guard"
+
+    def test_init_missing_key_raises_actionable_error(self, monkeypatch):
+        # No positional key and no env var → the shared actionable ValueError,
+        # not a bare TypeError about a missing positional argument.
+        monkeypatch.delenv("PROMPTGUARD_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="API key required"):
+            GuardClient()
+
+    def test_init_falls_back_to_env_key(self, monkeypatch):
+        monkeypatch.setenv("PROMPTGUARD_API_KEY", "pg_env_key")
+        monkeypatch.delenv("PROMPTGUARD_BASE_URL", raising=False)
+        client = GuardClient()
+        assert client._api_key == "pg_env_key"
 
     def test_init_custom_url(self):
         client = GuardClient(
