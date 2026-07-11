@@ -63,12 +63,31 @@ class PromptGuardGuardrail:
         context = {"framework": "crewai", "metadata": {"hook": "before_kickoff"}}
         decision = self._scan_and_check(messages, "input", context)
 
-        if decision and decision.redacted and decision.redacted_messages:
+        if decision and decision.redacted:
+            redacted_messages = decision.redacted_messages or []
+            # A redacted_messages list shorter than the scanned messages would
+            # leave the unmatched trailing inputs unredacted, so a missing,
+            # empty, or partial list cannot be honored.
+            is_partial = len(redacted_messages) < len(messages)
             if self._mode == "enforce":
-                return self._apply_redaction(inputs, decision.redacted_messages)
+                if redacted_messages and not is_partial:
+                    return self._apply_redaction(inputs, redacted_messages)
+                # Fail safe: forwarding the original inputs would leak the
+                # exact content the guard asked us to redact, so block.
+                logger.error(
+                    "PromptGuard: redact decision could not be applied to crew "
+                    "inputs (%d redacted messages for %d scanned); blocking to "
+                    "avoid forwarding unredacted content (threat=%s, event=%s)",
+                    len(redacted_messages),
+                    len(messages),
+                    decision.threat_type,
+                    decision.event_id,
+                )
+                raise PromptGuardBlockedError(decision)
             logger.warning(
-                "[monitor] PromptGuard would redact crew input: %s",
+                "[monitor] PromptGuard would redact crew input: %s (event=%s)",
                 decision.threat_type,
+                decision.event_id,
             )
 
         return inputs

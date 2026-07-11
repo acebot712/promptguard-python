@@ -239,6 +239,63 @@ class TestCrewAIGuardrail:
         assert result["topic"] == "My SSN is [REDACTED]"
 
     @patch.object(GuardClient, "scan")
+    def test_before_kickoff_redact_missing_payload_blocks(self, mock_scan):
+        # Enforce mode: a redact decision with NO redacted_messages cannot be
+        # honored; forwarding the original inputs would leak the flagged
+        # content, so before_kickoff must block.
+        mock_scan.return_value = GuardDecision(
+            {"decision": "redact", "threat_type": "pii_leak", "event_id": "evt"}
+        )
+
+        guard = self._make_guardrail(mode="enforce")
+        with pytest.raises(PromptGuardBlockedError):
+            guard.before_kickoff({"topic": "My SSN is 123-45-6789"})
+
+    @patch.object(GuardClient, "scan")
+    def test_before_kickoff_redact_empty_payload_blocks(self, mock_scan):
+        mock_scan.return_value = GuardDecision(
+            {
+                "decision": "redact",
+                "threat_type": "pii_leak",
+                "event_id": "evt",
+                "redacted_messages": [],
+            }
+        )
+
+        guard = self._make_guardrail(mode="enforce")
+        with pytest.raises(PromptGuardBlockedError):
+            guard.before_kickoff({"topic": "My SSN is 123-45-6789"})
+
+    @patch.object(GuardClient, "scan")
+    def test_before_kickoff_redact_partial_payload_blocks(self, mock_scan):
+        # Two scannable inputs but only one redacted message: the second
+        # input would be forwarded unredacted, so enforce mode must block.
+        mock_scan.return_value = GuardDecision(
+            {
+                "decision": "redact",
+                "threat_type": "pii_leak",
+                "event_id": "evt",
+                "redacted_messages": [{"role": "user", "content": "[REDACTED]"}],
+            }
+        )
+
+        guard = self._make_guardrail(mode="enforce")
+        with pytest.raises(PromptGuardBlockedError):
+            guard.before_kickoff(
+                {"topic": "My SSN is 123-45-6789", "style": "card 4111-1111-1111-1111"}
+            )
+
+    @patch.object(GuardClient, "scan")
+    def test_before_kickoff_redact_missing_payload_monitor_passes_through(self, mock_scan):
+        mock_scan.return_value = GuardDecision(
+            {"decision": "redact", "threat_type": "pii_leak", "event_id": "evt"}
+        )
+
+        guard = self._make_guardrail(mode="monitor")
+        inputs = {"topic": "My SSN is 123-45-6789"}
+        assert guard.before_kickoff(inputs) == inputs
+
+    @patch.object(GuardClient, "scan")
     def test_after_kickoff_allow(self, mock_scan):
         mock_scan.return_value = GuardDecision({"decision": "allow"})
 
