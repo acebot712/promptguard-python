@@ -71,12 +71,12 @@ def _extract_messages_from_body(body: Any, model_id: str = "") -> list[dict[str,
     if isinstance(body, bytes | bytearray):
         try:
             body = json.loads(body)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError):  # includes JSONDecodeError + UnicodeDecodeError
             return []
     if isinstance(body, str):
         try:
             body = json.loads(body)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError):  # includes JSONDecodeError + UnicodeDecodeError
             return [{"role": "user", "content": body}]
     if not isinstance(body, dict):
         return []
@@ -86,7 +86,7 @@ def _extract_messages_from_body(body: Any, model_id: str = "") -> list[dict[str,
     if "messages" in body:
         _extract_system(body.get("system"), result)
         for msg in body["messages"]:
-            if isinstance(msg, dict):
+            if _emits_guard_message(msg):
                 content = _flatten_content_blocks(msg.get("content", ""))
                 result.append({"role": msg.get("role", "user"), "content": content})
         return result
@@ -94,7 +94,7 @@ def _extract_messages_from_body(body: Any, model_id: str = "") -> list[dict[str,
     if "Messages" in body:
         _extract_system(body.get("System", body.get("system")), result)
         for msg in body["Messages"]:
-            if isinstance(msg, dict):
+            if _emits_guard_message(msg):
                 role = msg.get("role", "user")
                 content = _flatten_content_blocks(msg.get("content", ""))
                 result.append({"role": role, "content": content})
@@ -107,6 +107,18 @@ def _extract_messages_from_body(body: Any, model_id: str = "") -> list[dict[str,
         return [{"role": "user", "content": body["prompt"]}]
 
     return []
+
+
+def _emits_guard_message(msg: Any) -> bool:
+    """Whether ``_extract_messages_from_body`` emits a guard message for a
+    ``messages`` / ``Messages`` entry.
+
+    Single source of truth shared by extraction and redaction: entries that
+    are skipped during extraction (non-dicts) must not consume a redacted
+    message during redaction, otherwise the indices drift and the ORIGINAL
+    flagged content of a later entry is forwarded unredacted.
+    """
+    return isinstance(msg, dict)
 
 
 def _system_produces_message(system: Any) -> bool:
@@ -123,59 +135,64 @@ def _system_produces_message(system: Any) -> bool:
     return False
 
 
-def _apply_redaction(args: tuple, kwargs: dict, redacted: list[dict[str, str]]) -> dict:
+def _apply_redaction(args: tuple, kwargs: dict, redacted: list[dict[str, str]]) -> dict | None:
     """Write redacted content back into the Bedrock request.
 
     ``api_params`` is passed positionally (``_make_api_call(self, op, params)``)
     so we mutate it in place — that same dict object is what the wrapped
-    original call receives.  Returns ``kwargs`` unchanged.
+    original call receives.  Returns ``kwargs`` unchanged on success, or
+    ``None`` when the request shape cannot be rewritten so ``_base``
+    escalates the redact decision to a block instead of forwarding the
+    original (unredacted) content.
     """
     if len(args) < 3 or not redacted:
-        return kwargs
+        return None
 
     operation_name = args[1]
     api_params = args[2]
     if not isinstance(api_params, dict):
-        return kwargs
+        return None
 
     if operation_name == "InvokeModel":
-        _redact_invoke_body(api_params, redacted)
+        applied = _redact_invoke_body(api_params, redacted)
     else:
-        _redact_converse_params(api_params, redacted)
-    return kwargs
+        applied = _redact_converse_params(api_params, redacted)
+    return kwargs if applied else None
 
 
-def _redact_invoke_body(api_params: dict, redacted: list[dict[str, str]]) -> None:
+def _redact_invoke_body(api_params: dict, redacted: list[dict[str, str]]) -> bool:
+    """Redact an InvokeModel body in place.  Returns False when it cannot."""
     raw = api_params.get("body", b"")
     was_bytes = isinstance(raw, bytes | bytearray)
     body: Any = raw
     if was_bytes:
         try:
             body = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return
+        except (ValueError, TypeError):  # includes JSONDecodeError + UnicodeDecodeError
+            return False
     elif isinstance(raw, str):
         try:
             body = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError):  # includes JSONDecodeError + UnicodeDecodeError
             # A bare string prompt maps to a single guard message.
-            if redacted:
-                api_params["body"] = redacted[0]["content"]
-            return
+            api_params["body"] = redacted[0]["content"]
+            return True
     if not isinstance(body, dict):
-        return
+        return False
 
-    _redact_body_dict(body, redacted, system_key="system")
+    if not _redact_body_dict(body, redacted, system_key="system"):
+        return False
     api_params["body"] = json.dumps(body).encode() if was_bytes else json.dumps(body)
+    return True
 
 
-def _redact_converse_params(api_params: dict, redacted: list[dict[str, str]]) -> None:
+def _redact_converse_params(api_params: dict, redacted: list[dict[str, str]]) -> bool:
     # Converse passes messages/system directly on api_params.  Real botocore
     # uses lowercase keys (``messages`` / ``system``); older/hand-rolled callers
     # sometimes use the capitalized forms, so prefer those only when present.
     system_key = "System" if "System" in api_params else "system"
     messages_key = "Messages" if "Messages" in api_params else "messages"
-    _redact_body_dict(
+    return _redact_body_dict(
         api_params,
         redacted,
         system_key=system_key,
@@ -190,33 +207,53 @@ def _redact_body_dict(
     system_key: str,
     messages_key: str = "messages",
     block_shaped: bool = False,
-) -> None:
+) -> bool:
+    """Redact a parsed request body in place, mirroring extraction order.
+
+    Returns False when the body has no shape we know how to rewrite, or when
+    an entry that emitted a guard message has no redacted counterpart —
+    forwarding it would leak the exact content the guard flagged.
+    """
+
     # Converse requires content/system as block lists (``[{"text": ...}]``);
     # InvokeModel provider bodies (Anthropic/Titan/Llama) take plain strings.
     def _fmt(content: str) -> Any:
         return [{"text": content}] if block_shaped else content
 
-    offset = 0
-    system = body.get(system_key)
-    if _system_produces_message(system) and redacted:
-        body[system_key] = _fmt(redacted[0]["content"])
-        offset = 1
-
-    messages = body.get(messages_key)
-    if isinstance(messages, list):
-        for i, msg in enumerate(messages):
-            idx = i + offset
-            if idx < len(redacted) and isinstance(msg, dict):
-                msg["content"] = _fmt(redacted[idx]["content"])
-        return
+    if messages_key in body:
+        messages = body.get(messages_key)
+        if not isinstance(messages, list):
+            return False
+        # Mirror extraction: the system prompt (when it produced a guard
+        # message) is guard index 0, then each emitting entry consumes the
+        # next redacted message.  Non-emitting entries were never scanned and
+        # must not advance the guard index.
+        guard_idx = 0
+        if _system_produces_message(body.get(system_key)):
+            body[system_key] = _fmt(redacted[0]["content"])
+            guard_idx = 1
+        for msg in messages:
+            if not _emits_guard_message(msg):
+                continue
+            if guard_idx >= len(redacted):
+                # A scanned entry without a redacted counterpart cannot be
+                # rewritten; escalate instead of forwarding it unredacted.
+                return False
+            msg["content"] = _fmt(redacted[guard_idx]["content"])
+            guard_idx += 1
+        return True
 
     # Single-field prompt formats (Titan inputText / Llama/Mistral prompt).
-    if "inputText" in body and redacted:
-        body["inputText"] = (
-            redacted[offset]["content"] if offset < len(redacted) else body["inputText"]
-        )
-    elif "prompt" in body and redacted:
-        body["prompt"] = redacted[offset]["content"] if offset < len(redacted) else body["prompt"]
+    # Extraction emits exactly one guard message for these (and ignores any
+    # ``system`` field), so the redacted counterpart is always index 0.
+    if "inputText" in body:
+        body["inputText"] = redacted[0]["content"]
+        return True
+    if "prompt" in body:
+        body["prompt"] = redacted[0]["content"]
+        return True
+
+    return False
 
 
 def _extract_system(system: Any, result: list[dict[str, str]]) -> None:
@@ -321,7 +358,7 @@ def _extract_invoke_response_text(response: dict) -> str | None:
         return None
     try:
         parsed = json.loads(data)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (ValueError, TypeError):  # includes JSONDecodeError + UnicodeDecodeError
         return None
     if not isinstance(parsed, dict):
         return None

@@ -227,6 +227,111 @@ class TestBedrockRedaction:
         )
         assert json.loads(api_params["body"])["inputText"] == "clean"
 
+    def test_non_dict_entry_does_not_misalign_converse_redaction(self):
+        """Extraction skips non-dict entries; redaction must skip the same
+        entries instead of consuming a redacted index positionally —
+        otherwise the entry AFTER the non-dict one keeps its ORIGINAL
+        flagged content."""
+        from promptguard.patches.bedrock_patch import (
+            _apply_redaction,
+            _extract_messages_from_body,
+        )
+
+        api_params = {
+            "messages": [
+                {"role": "user", "content": [{"text": "first leak"}]},
+                "not-a-message-dict",
+                {"role": "user", "content": [{"text": "second leak"}]},
+            ],
+        }
+        # Extraction emits exactly two guard messages (non-dict skipped).
+        guard_messages = _extract_messages_from_body(api_params)
+        assert [m["content"] for m in guard_messages] == ["first leak", "second leak"]
+
+        redacted = [
+            {"role": "user", "content": "first clean"},
+            {"role": "user", "content": "second clean"},
+        ]
+        out = _apply_redaction((object(), "Converse", api_params), {}, redacted)
+        assert out is not None
+        assert api_params["messages"][0]["content"] == [{"text": "first clean"}]
+        assert api_params["messages"][1] == "not-a-message-dict"
+        assert api_params["messages"][2]["content"] == [{"text": "second clean"}]
+
+    def test_non_dict_entry_does_not_misalign_invoke_redaction(self):
+        from promptguard.patches.bedrock_patch import (
+            _apply_redaction,
+            _extract_messages_from_body,
+        )
+
+        body = {
+            "system": "sys leak",
+            "messages": [
+                {"role": "user", "content": "user leak"},
+                None,
+                {"role": "user", "content": "tail leak"},
+            ],
+        }
+        api_params = {"body": json.dumps(body).encode()}
+        guard_messages = _extract_messages_from_body(api_params["body"])
+        assert len(guard_messages) == 3  # system + two dict messages
+
+        redacted = [
+            {"role": "system", "content": "sys clean"},
+            {"role": "user", "content": "user clean"},
+            {"role": "user", "content": "tail clean"},
+        ]
+        out = _apply_redaction((object(), "InvokeModel", api_params), {}, redacted)
+        assert out is not None
+        parsed = json.loads(api_params["body"])
+        assert parsed["system"] == "sys clean"
+        assert parsed["messages"][0]["content"] == "user clean"
+        assert parsed["messages"][1] is None
+        assert parsed["messages"][2]["content"] == "tail clean"
+
+    def test_scanned_entry_without_counterpart_returns_none(self):
+        """An emitting entry with no redacted counterpart cannot be rewritten;
+        the handler must return None so enforce mode escalates to block."""
+        from promptguard.patches.bedrock_patch import _apply_redaction
+
+        api_params = {
+            "messages": [
+                {"role": "user", "content": [{"text": "one"}]},
+                {"role": "user", "content": [{"text": "two"}]},
+            ],
+        }
+        out = _apply_redaction(
+            (object(), "Converse", api_params), {}, [{"role": "user", "content": "clean"}]
+        )
+        assert out is None
+
+    def test_undecodable_invoke_body_returns_none(self):
+        from promptguard.patches.bedrock_patch import _apply_redaction
+
+        api_params = {"body": b"\x00not-json"}
+        out = _apply_redaction(
+            (object(), "InvokeModel", api_params), {}, [{"role": "user", "content": "clean"}]
+        )
+        assert out is None
+        assert api_params["body"] == b"\x00not-json"  # left untouched
+
+    def test_unknown_body_shape_returns_none(self):
+        from promptguard.patches.bedrock_patch import _apply_redaction
+
+        api_params = {"someOtherField": "x"}
+        out = _apply_redaction(
+            (object(), "Converse", api_params), {}, [{"role": "user", "content": "clean"}]
+        )
+        assert out is None
+
+    def test_non_dict_api_params_returns_none(self):
+        from promptguard.patches.bedrock_patch import _apply_redaction
+
+        out = _apply_redaction(
+            (object(), "Converse", "not-a-dict"), {}, [{"role": "user", "content": "clean"}]
+        )
+        assert out is None
+
 
 # ── Bedrock response extraction (scan_responses=True) ─────────────────────
 
