@@ -90,6 +90,53 @@ class TestSyncStreamErrors:
             list(stream)
 
 
+class _FakeOkStream:
+    """A 200 stream that yields the given raw SSE lines."""
+
+    def __init__(self, lines):
+        self.status_code = 200
+        self.content = b""
+        self.headers = {}
+        self._lines = lines
+
+    def read(self):
+        return self.content
+
+    def json(self):
+        return {}
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+class TestMalformedSSE:
+    def test_malformed_data_line_raises_typed_error(self, monkeypatch):
+        pg = PromptGuard(api_key="pg_test")
+        monkeypatch.setattr(
+            pg._http,
+            "stream",
+            lambda *a, **k: _FakeStreamCM(_FakeOkStream(["data: {not json}"])),
+        )
+        stream = pg.chat.completions.create(
+            model="gpt", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+        with pytest.raises(PromptGuardError) as exc:
+            list(stream)
+        assert exc.value.code == "INVALID_STREAM_DATA"
+
+    def test_valid_data_lines_parsed(self, monkeypatch):
+        pg = PromptGuard(api_key="pg_test")
+        monkeypatch.setattr(
+            pg._http,
+            "stream",
+            lambda *a, **k: _FakeStreamCM(_FakeOkStream(['data: {"chunk": 1}', "data: [DONE]"])),
+        )
+        stream = pg.chat.completions.create(
+            model="gpt", messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+        assert list(stream) == [{"chunk": 1}]
+
+
 class TestAsyncStreamErrors:
     @pytest.mark.asyncio
     async def test_stream_4xx_raises(self, monkeypatch):
@@ -165,11 +212,19 @@ class TestRetryAfter:
     def test_invalid_value(self):
         assert _retry_after_seconds(_resp(429, headers={"Retry-After": "soon"})) is None
 
-    def test_http_date(self):
-        # A far-future date should yield a positive delay.
+    def test_http_date_is_clamped(self):
+        # A far-future date must be clamped to the ceiling, not honored literally.
         resp = _resp(429, headers={"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"})
         delay = _retry_after_seconds(resp)
-        assert delay is not None and delay > 0
+        assert delay == 60.0
+
+    def test_absurd_seconds_are_clamped(self):
+        assert _retry_after_seconds(_resp(429, headers={"Retry-After": "1e300"})) == 60.0
+
+    def test_non_finite_seconds(self):
+        # inf clamps to the ceiling; NaN is treated as absent.
+        assert _retry_after_seconds(_resp(429, headers={"Retry-After": "inf"})) == 60.0
+        assert _retry_after_seconds(_resp(429, headers={"Retry-After": "nan"})) is None
 
 
 class TestQuotaNotRetried:

@@ -6,14 +6,16 @@ for security scanning, caching, and cost optimization.
 """
 
 import asyncio
+import dataclasses
 import json
+import math
 import os
 import time
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, TypedDict
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -116,6 +118,25 @@ def _is_non_retryable_error(response: httpx.Response) -> bool:
     )
 
 
+# Upper bound on any honored Retry-After. A hostile or buggy upstream can send
+# ``inf``, ``1e300`` or a date centuries out; without a cap the client would
+# sleep effectively forever, so clamp to a sane ceiling.
+_MAX_RETRY_AFTER_SECONDS = 60.0
+
+
+def _bounded_delay(seconds: float) -> float | None:
+    """Clamp a parsed Retry-After delay to a finite, sane window.
+
+    NaN is unparseable → treated as absent. ``inf`` and absurdly large finite
+    values collapse to the ceiling.
+    """
+    if math.isnan(seconds):
+        return None
+    if not math.isfinite(seconds):  # +inf/-inf
+        return _MAX_RETRY_AFTER_SECONDS
+    return min(_MAX_RETRY_AFTER_SECONDS, max(0.0, seconds))
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     """Parse a ``Retry-After`` header (delta-seconds or HTTP-date) if present."""
     value = response.headers.get("Retry-After")
@@ -123,7 +144,7 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         return None
     value = value.strip()
     try:
-        return max(0.0, float(value))
+        return _bounded_delay(float(value))
     except ValueError:
         pass
     try:
@@ -134,7 +155,7 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    return _bounded_delay((when - datetime.now(timezone.utc)).total_seconds())
 
 
 _DEFAULT_PROXY_BASE_URL = "https://api.promptguard.co/api/v1/proxy"
@@ -171,15 +192,16 @@ def _init_config(
     if config is not None:
         # A hand-built Config must get the same treatment as the kwargs path:
         # normalize base_url to the /proxy endpoint and fall back to the API
-        # key env var when it was left empty.
-        config.base_url = _ensure_proxy_suffix(config.base_url)
+        # key env var when it was left empty.  Do this on a private copy via
+        # ``dataclasses.replace`` so the caller's Config is never mutated.
+        updates: dict[str, Any] = {"base_url": _ensure_proxy_suffix(config.base_url)}
         if not config.api_key:
-            config.api_key = os.environ.get("PROMPTGUARD_API_KEY", "")
+            updates["api_key"] = os.environ.get("PROMPTGUARD_API_KEY", "")
         if max_retries is not None:
-            config.max_retries = max(0, max_retries)
+            updates["max_retries"] = max(0, max_retries)
         if retry_delay is not None:
-            config.retry_delay = max(0.0, retry_delay)
-        return config
+            updates["retry_delay"] = max(0.0, retry_delay)
+        return dataclasses.replace(config, **updates)
     resolved_base = base_url or os.environ.get("PROMPTGUARD_BASE_URL", _DEFAULT_PROXY_BASE_URL)
     cfg = Config(
         api_key=api_key or os.environ.get("PROMPTGUARD_API_KEY", ""),
@@ -240,7 +262,17 @@ class ChatCompletions:
                     data = line[6:]
                     if data == "[DONE]":
                         break
-                    yield json.loads(data)
+                    # A malformed SSE data line is a protocol violation; surface
+                    # it as a typed error with context rather than letting a bare
+                    # JSONDecodeError escape the generator.
+                    try:
+                        yield json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise PromptGuardError(
+                            message=f"Malformed SSE data line from stream: {exc}",
+                            code="INVALID_STREAM_DATA",
+                            status_code=0,
+                        ) from exc
 
 
 class Chat:
@@ -362,7 +394,7 @@ class Agent:
         )
 
     def stats(self, agent_id: str) -> dict[str, Any]:
-        return self._client._request("GET", f"/agent/{agent_id}/stats")
+        return self._client._request("GET", f"/agent/{quote(agent_id, safe='')}/stats")
 
 
 class RedTeam:
@@ -377,7 +409,7 @@ class RedTeam:
     def run_test(self, test_name: str, target_preset: str = "default") -> dict[str, Any]:
         return self._client._request(
             "POST",
-            f"{self._BASE}/test/{test_name}",
+            f"{self._BASE}/test/{quote(test_name, safe='')}",
             json={"target_preset": target_preset},
         )
 
@@ -550,7 +582,17 @@ class AsyncChatCompletions:
                     data = line[6:]
                     if data == "[DONE]":
                         break
-                    yield json.loads(data)
+                    # A malformed SSE data line is a protocol violation; surface
+                    # it as a typed error with context rather than letting a bare
+                    # JSONDecodeError escape the generator.
+                    try:
+                        yield json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise PromptGuardError(
+                            message=f"Malformed SSE data line from stream: {exc}",
+                            code="INVALID_STREAM_DATA",
+                            status_code=0,
+                        ) from exc
 
 
 class AsyncChat:
@@ -670,7 +712,7 @@ class AsyncAgent:
         )
 
     async def stats(self, agent_id: str) -> dict[str, Any]:
-        return await self._client._request("GET", f"/agent/{agent_id}/stats")
+        return await self._client._request("GET", f"/agent/{quote(agent_id, safe='')}/stats")
 
 
 class AsyncRedTeam:
@@ -685,7 +727,7 @@ class AsyncRedTeam:
     async def run_test(self, test_name: str, target_preset: str = "default") -> dict[str, Any]:
         return await self._client._request(
             "POST",
-            f"{self._BASE}/test/{test_name}",
+            f"{self._BASE}/test/{quote(test_name, safe='')}",
             json={"target_preset": target_preset},
         )
 
