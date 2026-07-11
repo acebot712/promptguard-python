@@ -197,6 +197,16 @@ class TestNonRetryable:
         resp = _resp(429, {"error": {"type": "monthly_quota_exceeded"}})
         assert _is_non_retryable_error(resp) is True
 
+    def test_spending_limit_exceeded_by_code(self):
+        # Present in the generated QuotaErrorDetail codes; a hard spend cap
+        # will not recover within the retry window.
+        resp = _resp(429, {"error": {"code": "spending_limit_exceeded"}})
+        assert _is_non_retryable_error(resp) is True
+
+    def test_spending_limit_exceeded_by_type(self):
+        resp = _resp(429, {"error": {"type": "spending_limit_exceeded"}})
+        assert _is_non_retryable_error(resp) is True
+
     def test_ordinary_429_is_retryable(self):
         resp = _resp(429, {"error": {"code": "rate_limited"}})
         assert _is_non_retryable_error(resp) is False

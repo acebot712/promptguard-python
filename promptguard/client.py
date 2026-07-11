@@ -26,7 +26,8 @@ _SDK_LANG = "python"
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 # Codes signalling a hard quota exhaustion that won't recover within the retry
 # window — retrying just burns latency, so surface the error immediately.
-_NON_RETRYABLE_ERROR_CODES = {"monthly_quota_exceeded"}
+# Keep in sync with the generated QuotaErrorDetail codes (api_types.py).
+_NON_RETRYABLE_ERROR_CODES = {"monthly_quota_exceeded", "spending_limit_exceeded"}
 
 
 class PromptGuardError(Exception):
