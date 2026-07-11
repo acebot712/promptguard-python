@@ -12,9 +12,45 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from pathlib import Path
+
+# A valid Python identifier for schema names / property names. Anything from
+# the (remote, untrusted) spec that doesn't match is rejected so it can never
+# be interpolated into generated code as a class name or attribute.
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _is_identifier(name: str) -> bool:
+    return isinstance(name, str) and bool(_IDENT_RE.match(name))
+
+
+def _py_str_literal(value: object) -> str:
+    """Return a safe Python string literal for ``value``.
+
+    ``json.dumps`` on a string escapes quotes, backslashes and newlines, so the
+    result can be embedded in generated source without a breakout.
+    """
+    return json.dumps(str(value))
+
+
+def _sanitize_inline(text: object) -> str:
+    """Collapse a spec string to a single safe line for a ``#`` comment.
+
+    Newlines (which would inject arbitrary lines into the generated module) and
+    triple quotes are neutralised.
+    """
+    collapsed = " ".join(str(text).split())
+    return collapsed.replace('"""', '\\"\\"\\"')
+
+
+def _sanitize_docstring(text: object) -> str:
+    """Collapse a spec string for use inside a ``\"\"\"..\"\"\"`` docstring."""
+    collapsed = " ".join(str(text).split())
+    # Prevent closing the docstring early or starting an escape at its end.
+    return collapsed.replace("\\", "\\\\").replace('"""', "'''")
 
 
 def resolve_ref(ref: str) -> str:
@@ -28,7 +64,7 @@ def map_type(prop: dict) -> str:
         types = [map_type(p) for p in prop["anyOf"]]
         return " | ".join(types)
     if "enum" in prop:
-        return " | ".join(f'"{v}"' for v in prop["enum"])
+        return " | ".join(_py_str_literal(v) for v in prop["enum"])
 
     t = prop.get("type", "")
 
@@ -51,11 +87,11 @@ def generate_typed_dict(name: str, schema: dict) -> str:
     lines: list[str] = []
 
     if schema.get("description"):
-        lines.append(f'"""{schema["description"]}"""')
+        lines.append(f'"""{_sanitize_docstring(schema["description"])}"""')
         lines.append("")
 
     if "enum" in schema:
-        values = ", ".join(f'"{v}"' for v in schema["enum"])
+        values = ", ".join(_py_str_literal(v) for v in schema["enum"])
         lines.append(f"{name} = Literal[{values}]")
         lines.append("")
         return "\n".join(lines)
@@ -75,11 +111,22 @@ def generate_typed_dict(name: str, schema: dict) -> str:
     else:
         lines.append(f"class {name}(TypedDict, total=False):")
 
+    emitted = False
     for prop_name, prop_def in props.items():
+        # Reject property names that aren't plain identifiers — a malicious or
+        # malformed spec must not inject code via an attribute name.
+        if not _is_identifier(prop_name):
+            sys.stderr.write(f"Skipping invalid property name in {name!r}: {prop_name!r}\n")
+            continue
         py_type = map_type(prop_def)
         if prop_def.get("description"):
-            lines.append(f"    # {prop_def['description']}")
+            lines.append(f"    # {_sanitize_inline(prop_def['description'])}")
         lines.append(f"    {prop_name}: {py_type}")
+        emitted = True
+
+    # A TypedDict body can't be empty; fall back to a plain alias.
+    if not emitted:
+        return f"{name} = dict[str, Any]\n"
 
     lines.append("")
     return "\n".join(lines)
@@ -118,9 +165,14 @@ def main():
 
     """)
 
-    body = "\n\n".join(
-        generate_typed_dict(name, schema) for name, schema in sorted(schemas.items())
-    )
+    valid_schemas = []
+    for name, schema in sorted(schemas.items()):
+        if not _is_identifier(name):
+            sys.stderr.write(f"Skipping invalid schema name: {name!r}\n")
+            continue
+        valid_schemas.append((name, schema))
+
+    body = "\n\n".join(generate_typed_dict(name, schema) for name, schema in valid_schemas)
 
     output = header + body + "\n"
 
@@ -133,7 +185,7 @@ def main():
     if not init_path.exists():
         init_path.write_text("")
 
-    count = len(schemas)
+    count = len(valid_schemas)
     sys.stderr.write(f"Generated {count} types → {out_path}\n")
 
 
