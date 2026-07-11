@@ -228,24 +228,26 @@ For any language or framework, call the Guard API directly:
 ```python
 from promptguard import GuardClient
 
-guard = GuardClient(api_key="pg_live_xxx")
+# Use as a context manager so the underlying HTTP connection pool is closed.
+with GuardClient(api_key="pg_live_xxx") as guard:
+    # Scan before sending to LLM
+    decision = guard.scan(
+        messages=[{"role": "user", "content": "Hello!"}],
+        direction="input",
+        model="gpt-5-nano",
+    )
 
-# Scan before sending to LLM
-decision = guard.scan(
-    messages=[{"role": "user", "content": "Hello!"}],
-    direction="input",
-    model="gpt-5-nano",
-)
-
-if decision.blocked:
-    print(f"Blocked: {decision.threat_type}")
-elif decision.redacted:
-    # Use decision.redacted_messages instead of original
-    print("Content was redacted")
-else:
-    # Safe to proceed
-    pass
+    if decision.blocked:
+        print(f"Blocked: {decision.threat_type}")
+    elif decision.redacted:
+        # Use decision.redacted_messages instead of original
+        print("Content was redacted")
+    else:
+        # Safe to proceed
+        pass
 ```
+
+`GuardClient` also works as an async context manager (`async with GuardClient(...) as guard:` + `await guard.scan_async(...)`). If you keep a long-lived client instead, call `guard.close()` (or `await guard.aclose()`) when done.
 
 Or via HTTP directly (any language):
 

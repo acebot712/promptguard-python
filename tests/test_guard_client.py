@@ -269,6 +269,22 @@ class TestAsyncClientPerLoop:
         with pytest.raises(GuardApiError):
             guard._ensure_async_client()
 
+    def test_sync_context_manager_closes_client(self):
+        """`with GuardClient(...)` closes the sync client on exit."""
+        with GuardClient(api_key="pg_test") as guard:
+            assert guard is not None
+            client = guard._ensure_sync_client()
+            assert not client.is_closed
+        assert client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager_closes_client(self):
+        """`async with GuardClient(...)` closes the current loop's client."""
+        async with GuardClient(api_key="pg_test") as guard:
+            client = guard._ensure_async_client()
+            assert not client.is_closed
+        assert client.is_closed
+
     def test_close_closes_every_cached_client(self):
         """close() drains the per-loop map and closes each client."""
         import asyncio

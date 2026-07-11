@@ -293,6 +293,18 @@ class GuardClient:
             payload["context"] = context
         return payload
 
+    def __enter__(self) -> "GuardClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> "GuardClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
     def close(self):
         """Close the sync client and best-effort close all async clients.
 
