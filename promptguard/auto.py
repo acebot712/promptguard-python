@@ -21,6 +21,7 @@ Modes:
 """
 
 import logging
+import threading
 from typing import Any
 
 from promptguard._resolve import resolve_credentials
@@ -32,6 +33,9 @@ _guard_client: GuardClient | None = None
 _mode: str = "enforce"
 _fail_open: bool = True
 _scan_responses: bool = False
+# Guards the module-level globals during init()/shutdown() so concurrent or
+# repeat calls don't interleave a half-swapped client.
+_state_lock = threading.Lock()
 
 
 def init(
@@ -43,6 +47,12 @@ def init(
     timeout: float = 10.0,
 ) -> None:
     """Initialise PromptGuard auto-instrumentation.
+
+    Prefer calling this **once at application startup**, before spawning worker
+    threads or issuing LLM calls. Re-initialising at runtime is supported and
+    thread-safe (the new client is swapped in before the old one is closed), but
+    an in-flight request already holding the previous client may see its
+    connection closed underneath it.
 
     Parameters
     ----------
@@ -69,18 +79,24 @@ def init(
     if mode not in ("enforce", "monitor"):
         raise ValueError(f"mode must be 'enforce' or 'monitor', got {mode!r}")
 
-    # Re-initialising must not leak the previous client's HTTP connections.
-    if _guard_client is not None:
-        _guard_client.close()
-
-    _guard_client = GuardClient(
+    new_client = GuardClient(
         api_key=resolved_key,
         base_url=resolved_url,
         timeout=timeout,
     )
-    _mode = mode
-    _fail_open = fail_open
-    _scan_responses = scan_responses
+
+    # Swap the new client (and flags) into place atomically, then close the old
+    # one outside the lock. New callers see the new client before we close the
+    # old, so we never tear down a client we've just published.
+    with _state_lock:
+        old_client = _guard_client
+        _guard_client = new_client
+        _mode = mode
+        _fail_open = fail_open
+        _scan_responses = scan_responses
+
+    if old_client is not None:
+        old_client.close()
 
     _apply_patches()
 
@@ -97,9 +113,12 @@ def shutdown() -> None:
 
     _remove_patches()
 
-    if _guard_client:
-        _guard_client.close()
+    with _state_lock:
+        old_client = _guard_client
         _guard_client = None
+
+    if old_client:
+        old_client.close()
 
     logger.info("PromptGuard auto-instrumentation shut down")
 

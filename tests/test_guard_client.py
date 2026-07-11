@@ -203,3 +203,42 @@ class TestGuardClient:
                 messages=[{"role": "user", "content": "Hello"}],
                 direction="input",
             )
+
+
+class TestAsyncClientLoopRebuild:
+    """The async client is loop-bound; a loop change must not leak the old one."""
+
+    def test_loop_change_schedules_close_of_displaced_client(self):
+        client = GuardClient(api_key="pg_test")
+
+        old_client = MagicMock()
+        old_loop = MagicMock()
+        old_loop.is_closed.return_value = False
+        old_loop.is_running.return_value = True
+        client._async_client = old_client
+        client._async_loop = old_loop
+
+        # Simulate a *different* running loop without spinning up real sockets.
+        new_loop = MagicMock()
+        with (
+            patch("promptguard.guard.asyncio.get_running_loop", return_value=new_loop),
+            patch("promptguard.guard.httpx.AsyncClient", return_value=MagicMock()) as mock_ac,
+        ):
+            rebuilt = client._ensure_async_client()
+
+        assert rebuilt is not old_client
+        assert client._async_loop is new_loop
+        mock_ac.assert_called_once()
+        # The displaced client's close was scheduled on its original loop.
+        old_loop.call_soon_threadsafe.assert_called_once()
+
+    def test_schedule_aclose_noop_when_loop_not_running(self):
+        loop = MagicMock()
+        loop.is_closed.return_value = False
+        loop.is_running.return_value = False
+        GuardClient._schedule_aclose(MagicMock(), loop)
+        loop.call_soon_threadsafe.assert_not_called()
+
+    def test_schedule_aclose_noop_when_loop_none(self):
+        # No loop → nothing to schedule, no error.
+        GuardClient._schedule_aclose(MagicMock(), None)

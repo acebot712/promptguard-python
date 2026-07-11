@@ -130,19 +130,37 @@ class GuardClient:
         except RuntimeError:
             current_loop = None
         with self._client_lock:
-            # A client created on a now-defunct loop can't be reused; drop it
-            # (best effort — we can't await aclose() here) and rebuild.
+            # A client bound to a different loop can't be reused. Schedule a
+            # best-effort aclose() on its *original* loop (if still alive) so we
+            # don't leak the connection pool, then rebuild for the new loop.
             if (
                 self._async_client is not None
                 and current_loop is not None
                 and self._async_loop is not current_loop
             ):
-                logger.debug("Event loop changed; rebuilding async Guard client")
+                logger.debug("Event loop changed; closing displaced async Guard client")
+                self._schedule_aclose(self._async_client, self._async_loop)
                 self._async_client = None
+                self._async_loop = None
             if self._async_client is None:
                 self._async_client = httpx.AsyncClient(timeout=self._timeout)
                 self._async_loop = current_loop
         return self._async_client
+
+    @staticmethod
+    def _schedule_aclose(client: httpx.AsyncClient, loop: asyncio.AbstractEventLoop | None) -> None:
+        """Best-effort close of ``client`` on the ``loop`` it was bound to.
+
+        Only attempts anything when that loop is still alive and running; the
+        aclose() is scheduled thread-safely so it runs inside that loop.
+        """
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return
+        try:
+            loop.call_soon_threadsafe(lambda: loop.create_task(client.aclose()))
+        except RuntimeError:
+            # Loop stopped/closed between the check and the schedule.
+            logger.debug("Could not schedule aclose on displaced loop", exc_info=True)
 
     def _check_response(self, resp: httpx.Response) -> GuardDecision:
         """Validate response status and parse into a GuardDecision.
