@@ -3,6 +3,7 @@ Tests for the auto-instrumentation system (init/shutdown and patching).
 """
 
 import contextlib
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -96,6 +97,40 @@ class TestInit:
 
     def test_patched_sdks_empty_before_init(self):
         assert patched_sdks() == []
+
+    def test_init_warns_when_no_sdk_patched(self, caplog):
+        # When no supported SDK is importable, init() patches nothing. This is
+        # the most common silent onboarding failure, so it must surface at
+        # WARNING naming the SDKs it looked for.
+        with (
+            patch("promptguard.auto._apply_patches"),
+            caplog.at_level(logging.WARNING, logger="promptguard"),
+        ):
+            init(api_key="pg_test")
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "no supported LLM SDK to patch" in msg
+        # The message must name the SDKs it looked for so onboarding users know
+        # what to install.
+        for sdk in ("openai", "anthropic", "google-generativeai", "cohere", "boto3"):
+            assert sdk in msg
+
+    def test_init_info_when_sdk_patched(self, caplog):
+        # A non-empty patch set is the success path and must stay at INFO (not
+        # WARNING) so healthy startups don't emit false alarms.
+        import promptguard.auto as auto
+
+        fake_patch = type("FakePatch", (), {"NAME": "openai"})()
+        with (
+            patch.object(auto, "_apply_patches", lambda: auto._applied_patches.append(fake_patch)),
+            caplog.at_level(logging.INFO, logger="promptguard"),
+        ):
+            init(api_key="pg_test")
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(
+            r.levelno == logging.INFO and "patched SDKs" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestShutdown:

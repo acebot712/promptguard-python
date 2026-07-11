@@ -106,12 +106,24 @@ def init(
     _apply_patches()
 
     patched = patched_sdks()
-    logger.info(
-        "PromptGuard auto-instrumentation initialised (mode=%s, fail_open=%s); patched SDKs: %s",
-        mode,
-        fail_open,
-        ", ".join(patched) if patched else "none detected",
-    )
+    if patched:
+        logger.info(
+            "PromptGuard auto-instrumentation initialised "
+            "(mode=%s, fail_open=%s); patched SDKs: %s",
+            mode,
+            fail_open,
+            ", ".join(patched),
+        )
+    else:
+        # No supported SDK was importable, so init() patched nothing and no LLM
+        # call will be scanned. This is the most common silent onboarding
+        # failure, so surface it at WARNING (not INFO) with the SDKs we looked
+        # for, rather than letting init() succeed with zero signal.
+        logger.warning(
+            "PromptGuard initialised but found no supported LLM SDK to patch "
+            "(openai/anthropic/google-generativeai/cohere/boto3). "
+            "No calls will be scanned."
+        )
 
 
 def shutdown() -> None:
