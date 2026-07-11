@@ -9,7 +9,7 @@ import importlib.util
 import logging
 from typing import Any
 
-from promptguard.patches._base import wrap_async, wrap_sync
+from promptguard.patches._base import rewrite_message_object, wrap_async, wrap_sync
 
 logger = logging.getLogger("promptguard")
 
@@ -93,7 +93,16 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
     return guard_messages, str(model) if model else None, {"framework": "anthropic"}
 
 
-def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
+def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | None:
+    """Write redacted content back into Anthropic ``create()`` kwargs.
+
+    Mirrors ``_messages_to_guard_format`` (``system`` first, then every
+    message).  Attribute-based message objects are rewritten via a copy; if
+    any message with a redacted counterpart cannot be rewritten, returns
+    ``None`` so enforce mode escalates to a block.
+    """
+    if not redacted:
+        return None
     new_kwargs: dict = dict(kwargs)
     system = new_kwargs.get("system")
     messages = new_kwargs.get("messages")
@@ -102,22 +111,32 @@ def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
     has_system = _system_to_text(system) is not None
     offset = 1 if has_system else 0
 
-    if has_system and redacted:
+    if has_system:
         new_kwargs["system"] = redacted[0]["content"]
 
-    if messages and redacted:
+    if messages:
         result: list = []
         for i, msg in enumerate(messages):
             idx = i + offset
-            if idx < len(redacted):
-                if isinstance(msg, dict):
-                    new_msg = dict(msg)
-                    new_msg["content"] = redacted[idx]["content"]
-                    result.append(new_msg)
+            if idx >= len(redacted):
+                # No redacted counterpart for a scanned message; forwarding
+                # the original would leak flagged content.
+                return None
+            replacement = redacted[idx]["content"]
+            if isinstance(msg, dict):
+                new_msg = dict(msg)
+                # Preserve the block shape: list content is rebuilt as a
+                # text block rather than collapsed to a bare string.
+                if isinstance(new_msg.get("content"), list):
+                    new_msg["content"] = [{"type": "text", "text": replacement}]
                 else:
-                    result.append(msg)
+                    new_msg["content"] = replacement
+                result.append(new_msg)
             else:
-                result.append(msg)
+                rewritten = rewrite_message_object(msg, "content", replacement)
+                if rewritten is None:
+                    return None
+                result.append(rewritten)
         new_kwargs["messages"] = result
 
     return new_kwargs

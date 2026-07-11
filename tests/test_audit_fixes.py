@@ -337,6 +337,57 @@ class TestBedrockResponseExtraction:
 # ── Cohere redaction ──────────────────────────────────────────────────────
 
 
+class _ChatMessage:
+    """Cohere-v1-style ChatMessage stand-in (attribute-based, copyable)."""
+
+    def __init__(self, role, message):
+        self.role = role
+        self.message = message
+
+
+class _V2Message:
+    """Cohere-v2-style message object stand-in (role/content attributes)."""
+
+    def __init__(self, role, content):
+        self.role = role
+        self.content = content
+
+
+class _PydanticV2Message:
+    """Message object exposing pydantic-v2-style model_copy(update=...)."""
+
+    def __init__(self, role, content):
+        self.role = role
+        self.content = content
+
+    def model_copy(self, update=None):
+        clone = _PydanticV2Message(self.role, self.content)
+        for key, value in (update or {}).items():
+            setattr(clone, key, value)
+        return clone
+
+
+class _FrozenMessage:
+    """A message object that cannot be rewritten (read-only content)."""
+
+    __slots__ = ("_content", "_role")
+
+    def __init__(self, role, content):
+        object.__setattr__(self, "_role", role)
+        object.__setattr__(self, "_content", content)
+
+    @property
+    def role(self):
+        return self._role
+
+    @property
+    def content(self):
+        return self._content
+
+    def __setattr__(self, name, value):
+        raise AttributeError(f"{name} is read-only")
+
+
 class TestCohereRedaction:
     def test_v2_messages_redacted(self):
         from promptguard.patches.cohere_patch import _apply_redaction
@@ -360,3 +411,175 @@ class TestCohereRedaction:
         out = _apply_redaction((), kwargs, redacted)
         assert out["chat_history"][0]["message"] == "old clean"
         assert out["message"] == "new clean"
+
+    def test_chat_message_objects_rewritten(self):
+        """Idiomatic cohere.ChatMessage history objects must be rewritten,
+        not silently forwarded with their original content."""
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        history = [_ChatMessage("USER", "old leak"), _ChatMessage("CHATBOT", "reply leak")]
+        kwargs = {"chat_history": history, "message": "new leak"}
+        redacted = [
+            {"role": "USER", "content": "old clean"},
+            {"role": "CHATBOT", "content": "reply clean"},
+            {"role": "user", "content": "new clean"},
+        ]
+        out = _apply_redaction((), kwargs, redacted)
+        assert out["chat_history"][0].message == "old clean"
+        assert out["chat_history"][1].message == "reply clean"
+        assert out["message"] == "new clean"
+        # Originals are not mutated (copies are forwarded).
+        assert history[0].message == "old leak"
+
+    def test_v2_message_objects_rewritten(self):
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        kwargs = {"messages": [_V2Message("user", "leak")]}
+        out = _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}])
+        assert out["messages"][0].content == "clean"
+
+    def test_pydantic_style_object_rewritten_via_model_copy(self):
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        kwargs = {"messages": [_PydanticV2Message("user", "leak")]}
+        out = _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}])
+        assert out["messages"][0].content == "clean"
+
+    def test_roleless_history_entry_does_not_consume_index(self):
+        """Extraction skips history entries without a role; redaction must
+        skip the same entries so indices stay aligned."""
+        from promptguard.patches.cohere_patch import _apply_redaction, _to_guard_messages
+
+        roleless = object()  # no role attr → not extracted
+        kwargs = {
+            "chat_history": [roleless, {"role": "user", "message": "old leak"}],
+            "message": "new leak",
+        }
+        # Extraction sees exactly two guard messages.
+        guard_messages = _to_guard_messages(
+            message=kwargs["message"], chat_history=kwargs["chat_history"]
+        )
+        assert len(guard_messages) == 2
+
+        redacted = [
+            {"role": "user", "content": "old clean"},
+            {"role": "user", "content": "new clean"},
+        ]
+        out = _apply_redaction((), kwargs, redacted)
+        assert out["chat_history"][0] is roleless
+        assert out["chat_history"][1]["message"] == "old clean"
+        assert out["message"] == "new clean"
+
+    def test_unrewritable_object_returns_none(self):
+        """A message with a redacted counterpart that cannot be rewritten
+        must fail the whole redaction (None → block in enforce mode)."""
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        kwargs = {"messages": [_FrozenMessage("user", "leak")]}
+        assert _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}]) is None
+
+    def test_missing_counterpart_returns_none(self):
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        kwargs = {
+            "messages": [
+                {"role": "user", "content": "one"},
+                {"role": "user", "content": "two"},
+            ]
+        }
+        assert _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}]) is None
+
+    def test_no_redactable_shape_returns_none(self):
+        from promptguard.patches.cohere_patch import _apply_redaction
+
+        assert _apply_redaction((), {}, [{"role": "user", "content": "clean"}]) is None
+
+
+# ── OpenAI / Anthropic object-message redaction ───────────────────────────
+
+
+class TestOpenAIObjectRedaction:
+    def test_object_message_rewritten(self):
+        from promptguard.patches.openai_patch import _apply_redaction
+
+        kwargs = {"messages": [_V2Message("user", "leak")]}
+        out = _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}])
+        assert out["messages"][0].content == "clean"
+
+    def test_unrewritable_object_returns_none(self):
+        from promptguard.patches.openai_patch import _apply_redaction
+
+        kwargs = {"messages": [_FrozenMessage("user", "leak")]}
+        assert _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}]) is None
+
+    def test_unextracted_entry_does_not_consume_index(self):
+        """Entries skipped by extraction (no role/content) must not shift
+        the redaction indices for the following messages."""
+        from promptguard.patches.openai_patch import _apply_redaction, _messages_to_guard_format
+
+        skipped = object()
+        messages = [skipped, {"role": "user", "content": "leak"}]
+        assert len(_messages_to_guard_format(messages)) == 1
+
+        out = _apply_redaction((), {"messages": messages}, [{"role": "user", "content": "clean"}])
+        assert out["messages"][0] is skipped
+        assert out["messages"][1]["content"] == "clean"
+
+    def test_multimodal_content_rebuilt_as_text_part(self):
+        from promptguard.patches.openai_patch import _apply_redaction
+
+        messages = [{"role": "user", "content": [{"type": "text", "text": "leak"}]}]
+        out = _apply_redaction((), {"messages": messages}, [{"role": "user", "content": "clean"}])
+        assert out["messages"][0]["content"] == [{"type": "text", "text": "clean"}]
+
+    def test_missing_counterpart_returns_none(self):
+        from promptguard.patches.openai_patch import _apply_redaction
+
+        messages = [
+            {"role": "user", "content": "one"},
+            {"role": "user", "content": "two"},
+        ]
+        assert (
+            _apply_redaction((), {"messages": messages}, [{"role": "user", "content": "clean"}])
+            is None
+        )
+
+
+class TestAnthropicObjectRedaction:
+    def test_object_message_rewritten(self):
+        from promptguard.patches.anthropic_patch import _apply_redaction
+
+        kwargs = {"messages": [_V2Message("user", "leak")]}
+        out = _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}])
+        assert out["messages"][0].content == "clean"
+
+    def test_unrewritable_object_returns_none(self):
+        from promptguard.patches.anthropic_patch import _apply_redaction
+
+        kwargs = {"messages": [_FrozenMessage("user", "leak")]}
+        assert _apply_redaction((), kwargs, [{"role": "user", "content": "clean"}]) is None
+
+    def test_system_offset_preserved_with_objects(self):
+        from promptguard.patches.anthropic_patch import _apply_redaction
+
+        kwargs = {"system": "sys leak", "messages": [_V2Message("user", "user leak")]}
+        redacted = [
+            {"role": "system", "content": "sys clean"},
+            {"role": "user", "content": "user clean"},
+        ]
+        out = _apply_redaction((), kwargs, redacted)
+        assert out["system"] == "sys clean"
+        assert out["messages"][0].content == "user clean"
+
+    def test_missing_counterpart_returns_none(self):
+        from promptguard.patches.anthropic_patch import _apply_redaction
+
+        kwargs = {
+            "system": "sys",
+            "messages": [{"role": "user", "content": "one"}, {"role": "user", "content": "two"}],
+        }
+        redacted = [
+            {"role": "system", "content": "sys clean"},
+            {"role": "user", "content": "one clean"},
+        ]
+        assert _apply_redaction((), kwargs, redacted) is None
