@@ -80,6 +80,8 @@ path = "promptguard/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["promptguard"]
+# Ship the PEP 561 marker so downstream mypy/pyright treat the SDK as typed.
+artifacts = ["promptguard/py.typed"]
 
 [tool.ruff]
 line-length = 100
