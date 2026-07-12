@@ -9,7 +9,7 @@ import importlib.util
 import logging
 from typing import Any
 
-from promptguard.patches._base import wrap_async, wrap_sync
+from promptguard.patches._base import rewrite_message_object, wrap_async, wrap_sync
 
 logger = logging.getLogger("promptguard")
 
@@ -24,10 +24,24 @@ _patched = False
 # ---------------------------------------------------------------------------
 
 
+def _preamble_to_text(preamble: Any) -> str | None:
+    """Return the guard-message text for a v1 ``preamble``, or ``None``.
+
+    The preamble is Cohere v1's system prompt, so it is scanned as a
+    ``system`` guard message.  Single source of truth for "does ``preamble``
+    produce a guard message" — shared by extraction and redaction so their
+    indices stay aligned (v2 ``messages`` calls never use it).
+    """
+    if isinstance(preamble, str) and preamble:
+        return preamble
+    return None
+
+
 def _to_guard_messages(
     message: Any = None,
     chat_history: Any = None,
     messages: Any = None,
+    preamble: Any = None,
 ) -> list[dict[str, str]]:
     """Convert Cohere chat args to guard API format."""
     result: list[dict[str, str]] = []
@@ -44,6 +58,11 @@ def _to_guard_messages(
             elif hasattr(msg, "role") and hasattr(msg, "content"):
                 result.append({"role": str(msg.role), "content": str(msg.content or "")})
         return result
+
+    # v1 surface: preamble (system prompt) first, then history, then message.
+    preamble_text = _preamble_to_text(preamble)
+    if preamble_text is not None:
+        result.append({"role": "system", "content": preamble_text})
 
     if chat_history:
         for msg in chat_history:
@@ -69,9 +88,115 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
         message=kwargs.get("message"),
         chat_history=kwargs.get("chat_history"),
         messages=kwargs.get("messages"),
+        preamble=kwargs.get("preamble"),
     )
     model = kwargs.get("model")
     return guard_messages, str(model) if model else "cohere", {"framework": "cohere"}
+
+
+def _emits_v2_guard_message(msg: Any) -> bool:
+    """Whether ``_to_guard_messages`` emits a guard message for a ``messages``
+    (v2) entry.  Single source of truth for extraction and redaction so their
+    indices stay aligned (skipped entries must not consume a redacted one)."""
+    return isinstance(msg, dict) or (hasattr(msg, "role") and hasattr(msg, "content"))
+
+
+def _emits_history_guard_message(msg: Any) -> bool:
+    """Same as ``_emits_v2_guard_message`` but for ``chat_history`` entries."""
+    return isinstance(msg, dict) or hasattr(msg, "role")
+
+
+def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | None:
+    """Write redacted content back into Cohere chat kwargs.
+
+    Mirrors the extraction order in ``_to_guard_messages``:
+    - ``messages`` (v2) takes precedence; or
+    - ``preamble`` (v1 system prompt) first, then ``chat_history`` entries,
+      then the trailing ``message`` string.
+
+    Only entries that emitted a guard message consume a redacted message, so
+    the indices stay aligned with extraction.  Attribute-based message
+    objects (e.g. ``cohere.ChatMessage``) are rewritten via a copy; if any
+    message with a redacted counterpart cannot be rewritten, returns ``None``
+    so enforce mode escalates to a block.
+    """
+    if not redacted:
+        return None
+    new_kwargs: dict = dict(kwargs)
+
+    messages = new_kwargs.get("messages")
+    if messages:
+        rebuilt: list = []
+        guard_idx = 0
+        for msg in messages:
+            if not _emits_v2_guard_message(msg):
+                rebuilt.append(msg)
+                continue
+            replacement = redacted[guard_idx] if guard_idx < len(redacted) else None
+            guard_idx += 1
+            if replacement is None:
+                # No redacted counterpart for a scanned message; forwarding
+                # the original would leak flagged content.
+                return None
+            if isinstance(msg, dict):
+                new_msg = dict(msg)
+                new_msg["content"] = replacement["content"]
+                rebuilt.append(new_msg)
+            else:
+                rewritten = rewrite_message_object(msg, "content", replacement["content"])
+                if rewritten is None:
+                    return None
+                rebuilt.append(rewritten)
+        new_kwargs["messages"] = rebuilt
+        return new_kwargs
+
+    guard_idx = 0
+    rewrote_any = False
+
+    # v1 preamble consumed guard index 0 during extraction.
+    if _preamble_to_text(new_kwargs.get("preamble")) is not None:
+        new_kwargs["preamble"] = redacted[0]["content"]
+        guard_idx = 1
+        rewrote_any = True
+
+    chat_history = new_kwargs.get("chat_history")
+    if chat_history:
+        rebuilt = []
+        for msg in chat_history:
+            if not _emits_history_guard_message(msg):
+                rebuilt.append(msg)
+                continue
+            replacement = redacted[guard_idx] if guard_idx < len(redacted) else None
+            guard_idx += 1
+            if replacement is None:
+                return None
+            if isinstance(msg, dict):
+                new_msg = dict(msg)
+                key = "message" if "message" in new_msg else "content"
+                new_msg[key] = replacement["content"]
+                rebuilt.append(new_msg)
+            else:
+                # Mirror extraction: text lives in ``message`` (v1 history
+                # objects), falling back to ``content``.
+                attr = "message" if hasattr(msg, "message") else "content"
+                rewritten = rewrite_message_object(msg, attr, replacement["content"])
+                if rewritten is None:
+                    return None
+                rebuilt.append(rewritten)
+        new_kwargs["chat_history"] = rebuilt
+        rewrote_any = True
+
+    if new_kwargs.get("message") is not None:
+        if guard_idx >= len(redacted):
+            return None
+        new_kwargs["message"] = redacted[guard_idx]["content"]
+        rewrote_any = True
+
+    if not rewrote_any:
+        # No known redactable shape was present.
+        return None
+
+    return new_kwargs
 
 
 def _extract_response_text(response: Any) -> str | None:
@@ -124,7 +249,12 @@ def apply() -> bool:
             key = f"{cls_name}.chat"
             _originals[key] = cls.chat
             wrap_fn = wrap_async if is_async else wrap_sync
-            cls.chat = wrap_fn(cls.chat, _extract_messages, _extract_response_text)
+            cls.chat = wrap_fn(
+                cls.chat,
+                _extract_messages,
+                _extract_response_text,
+                _apply_redaction,
+            )
             patched_any = True
         except (AttributeError, TypeError):
             pass

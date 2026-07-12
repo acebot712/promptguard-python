@@ -2,15 +2,16 @@
 Auto-instrumentation for PromptGuard.
 
 Call ``promptguard.init()`` once at application startup to automatically
-secure *all* LLM calls made through popular SDKs, regardless of which
-framework (LangChain, CrewAI, AutoGen, LlamaIndex, …) sits on top.
+secure LLM calls made through the patched SDK surfaces (see README
+"Exact patched call surfaces"), regardless of which framework (LangChain,
+CrewAI, AutoGen, LlamaIndex, …) sits on top.
 
 Usage::
 
     import promptguard
     promptguard.init(api_key="pg_live_xxx")  # or set PROMPTGUARD_API_KEY env var
 
-    # Everything below is now secured transparently.
+    # Calls through the patched surfaces are now secured transparently.
     from openai import OpenAI
     client = OpenAI()
     client.chat.completions.create(...)   # ← scanned by PromptGuard
@@ -21,9 +22,10 @@ Modes:
 """
 
 import logging
+import threading
 from typing import Any
 
-from promptguard._resolve import resolve_credentials
+from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.guard import GuardClient
 
 logger = logging.getLogger("promptguard")
@@ -32,6 +34,9 @@ _guard_client: GuardClient | None = None
 _mode: str = "enforce"
 _fail_open: bool = True
 _scan_responses: bool = False
+# Guards the module-level globals during init()/shutdown() so concurrent or
+# repeat calls don't interleave a half-swapped client.
+_state_lock = threading.Lock()
 
 
 def init(
@@ -43,6 +48,12 @@ def init(
     timeout: float = 10.0,
 ) -> None:
     """Initialise PromptGuard auto-instrumentation.
+
+    Prefer calling this **once at application startup**, before spawning worker
+    threads or issuing LLM calls. Re-initialising at runtime is supported and
+    thread-safe (the new client is swapped in before the old one is closed), but
+    an in-flight request already holding the previous client may see its
+    connection closed underneath it.
 
     Parameters
     ----------
@@ -58,33 +69,61 @@ def init(
         unreachable.  Set to ``False`` to fail-closed.
     scan_responses:
         If ``True``, also scan LLM responses through the Guard API with
-        ``direction="output"``.
+        ``direction="output"``.  Defaults to ``False`` here (the zero-config
+        drop-in) to avoid doubling Guard API round-trips per LLM call; the
+        framework callback handlers default this to ``True`` because they
+        already receive response events for free.
     timeout:
-        HTTP timeout (seconds) for Guard API calls.
+        HTTP timeout (seconds) for Guard API calls.  Defaults to ``10.0``: the
+        Guard scan is a fast, standalone call in the request path.  (The proxy
+        client's default is ``30.0`` because it fronts the full upstream LLM
+        call, which is inherently slower.)
     """
     global _guard_client, _mode, _fail_open, _scan_responses
 
     resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+    validate_mode(mode)
 
-    if mode not in ("enforce", "monitor"):
-        raise ValueError(f"mode must be 'enforce' or 'monitor', got {mode!r}")
-
-    _guard_client = GuardClient(
+    new_client = GuardClient(
         api_key=resolved_key,
         base_url=resolved_url,
         timeout=timeout,
     )
-    _mode = mode
-    _fail_open = fail_open
-    _scan_responses = scan_responses
+
+    # Swap the new client (and flags) into place atomically, then close the old
+    # one outside the lock. New callers see the new client before we close the
+    # old, so we never tear down a client we've just published.
+    with _state_lock:
+        old_client = _guard_client
+        _guard_client = new_client
+        _mode = mode
+        _fail_open = fail_open
+        _scan_responses = scan_responses
+
+    if old_client is not None:
+        old_client.close()
 
     _apply_patches()
 
-    logger.info(
-        "PromptGuard auto-instrumentation initialised (mode=%s, fail_open=%s)",
-        mode,
-        fail_open,
-    )
+    patched = patched_sdks()
+    if patched:
+        logger.info(
+            "PromptGuard auto-instrumentation initialised "
+            "(mode=%s, fail_open=%s); patched SDKs: %s",
+            mode,
+            fail_open,
+            ", ".join(patched),
+        )
+    else:
+        # No supported SDK was importable, so init() patched nothing and no LLM
+        # call will be scanned. This is the most common silent onboarding
+        # failure, so surface it at WARNING (not INFO) with the SDKs we looked
+        # for, rather than letting init() succeed with zero signal.
+        logger.warning(
+            "PromptGuard initialised but found no supported LLM SDK to patch "
+            "(openai/anthropic/google-generativeai/cohere/boto3). "
+            "No calls will be scanned."
+        )
 
 
 def shutdown() -> None:
@@ -93,9 +132,12 @@ def shutdown() -> None:
 
     _remove_patches()
 
-    if _guard_client:
-        _guard_client.close()
+    with _state_lock:
+        old_client = _guard_client
         _guard_client = None
+
+    if old_client:
+        old_client.close()
 
     logger.info("PromptGuard auto-instrumentation shut down")
 
@@ -117,6 +159,30 @@ def is_fail_open() -> bool:
 
 def should_scan_responses() -> bool:
     return _scan_responses
+
+
+# -- Introspection helpers (public API) --------------------------------------
+
+
+def patched_sdks() -> list[str]:
+    """Return the names of the SDKs actually patched by the last ``init()``.
+
+    Useful in tests/health checks to assert instrumentation is live, e.g.::
+
+        promptguard.init(api_key=...)
+        assert "openai" in promptguard.patched_sdks()
+
+    Returns an empty list before ``init()`` or after ``shutdown()``, or when no
+    supported SDK is importable in the current environment.
+    """
+    return [patch_module.NAME for patch_module in _applied_patches]
+
+
+def is_active() -> bool:
+    """Return ``True`` when auto-instrumentation is initialised (a guard client
+    is installed). Note this is independent of whether any SDK was patchable —
+    use :func:`patched_sdks` to confirm specific SDKs are instrumented."""
+    return _guard_client is not None
 
 
 # -- Patch orchestration -----------------------------------------------------

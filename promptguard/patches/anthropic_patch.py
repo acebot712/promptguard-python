@@ -9,7 +9,7 @@ import importlib.util
 import logging
 from typing import Any
 
-from promptguard.patches._base import wrap_async, wrap_sync
+from promptguard.patches._base import rewrite_message_object, wrap_async, wrap_sync
 
 logger = logging.getLogger("promptguard")
 
@@ -25,6 +25,76 @@ _patched = False
 # ---------------------------------------------------------------------------
 
 
+def _system_to_text(system: Any) -> str | None:
+    """Return the guard-message text for ``system``, or ``None`` if it yields
+    no message.
+
+    This is the single source of truth for "does ``system`` produce a guard
+    message" — used by both extraction and redaction so their indices stay in
+    lockstep (a truthy-but-empty ``system`` must not shift the offset).
+    """
+    if not system:
+        return None
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        text_parts = []
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif hasattr(block, "text"):
+                text_parts.append(block.text)
+        if text_parts:
+            return "\n".join(text_parts)
+    return None
+
+
+def _tool_result_to_text(content: Any) -> str:
+    """Flatten the ``content`` field of a ``tool_result`` block to text.
+
+    Tool results are the canonical indirect prompt-injection channel (text a
+    tool fetched from the outside world), so they MUST be scanned.  The field
+    is either a plain string or a list of content blocks (text/image); only
+    text carries scannable content.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif hasattr(block, "text"):
+                parts.append(str(block.text))
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+def _flatten_content_blocks(content: Any) -> str:
+    """Flatten an Anthropic content-block list to scannable text.
+
+    Includes ``text`` blocks and the text inside ``tool_result`` blocks.
+    The whole list still collapses into ONE guard message, so redaction
+    indices are unaffected by how many blocks a message contains.
+    """
+    text_parts = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif block.get("type") == "tool_result":
+                tool_text = _tool_result_to_text(block.get("content"))
+                if tool_text:
+                    text_parts.append(tool_text)
+        elif getattr(block, "type", None) == "tool_result":
+            tool_text = _tool_result_to_text(getattr(block, "content", None))
+            if tool_text:
+                text_parts.append(tool_text)
+        elif hasattr(block, "text"):
+            text_parts.append(str(block.text))
+    return "\n".join(text_parts)
+
+
 def _messages_to_guard_format(
     messages: Any,
     system: Any = None,
@@ -36,18 +106,9 @@ def _messages_to_guard_format(
     """
     result: list[dict[str, str]] = []
 
-    if system:
-        if isinstance(system, str):
-            result.append({"role": "system", "content": system})
-        elif isinstance(system, list):
-            text_parts = []
-            for block in system:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif hasattr(block, "text"):
-                    text_parts.append(block.text)
-            if text_parts:
-                result.append({"role": "system", "content": "\n".join(text_parts)})
+    system_text = _system_to_text(system)
+    if system_text is not None:
+        result.append({"role": "system", "content": system_text})
 
     if not messages:
         return result
@@ -57,13 +118,7 @@ def _messages_to_guard_format(
         content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
 
         if isinstance(content, list):
-            text_parts = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif hasattr(block, "text"):
-                    text_parts.append(block.text)
-            content = "\n".join(text_parts)
+            content = _flatten_content_blocks(content)
 
         result.append({"role": str(role), "content": str(content)})
 
@@ -78,29 +133,50 @@ def _extract_messages(args, kwargs) -> tuple[list[dict[str, str]], str | None, d
     return guard_messages, str(model) if model else None, {"framework": "anthropic"}
 
 
-def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict:
+def _apply_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | None:
+    """Write redacted content back into Anthropic ``create()`` kwargs.
+
+    Mirrors ``_messages_to_guard_format`` (``system`` first, then every
+    message).  Attribute-based message objects are rewritten via a copy; if
+    any message with a redacted counterpart cannot be rewritten, returns
+    ``None`` so enforce mode escalates to a block.
+    """
+    if not redacted:
+        return None
     new_kwargs: dict = dict(kwargs)
     system = new_kwargs.get("system")
     messages = new_kwargs.get("messages")
-    has_system = system is not None
+    # Use the exact same predicate as extraction so the message index offset
+    # matches the redacted_messages list.
+    has_system = _system_to_text(system) is not None
     offset = 1 if has_system else 0
 
-    if has_system and redacted:
+    if has_system:
         new_kwargs["system"] = redacted[0]["content"]
 
-    if messages and redacted:
+    if messages:
         result: list = []
         for i, msg in enumerate(messages):
             idx = i + offset
-            if idx < len(redacted):
-                if isinstance(msg, dict):
-                    new_msg = dict(msg)
-                    new_msg["content"] = redacted[idx]["content"]
-                    result.append(new_msg)
+            if idx >= len(redacted):
+                # No redacted counterpart for a scanned message; forwarding
+                # the original would leak flagged content.
+                return None
+            replacement = redacted[idx]["content"]
+            if isinstance(msg, dict):
+                new_msg = dict(msg)
+                # Preserve the block shape: list content is rebuilt as a
+                # text block rather than collapsed to a bare string.
+                if isinstance(new_msg.get("content"), list):
+                    new_msg["content"] = [{"type": "text", "text": replacement}]
                 else:
-                    result.append(msg)
+                    new_msg["content"] = replacement
+                result.append(new_msg)
             else:
-                result.append(msg)
+                rewritten = rewrite_message_object(msg, "content", replacement)
+                if rewritten is None:
+                    return None
+                result.append(rewritten)
         new_kwargs["messages"] = result
 
     return new_kwargs

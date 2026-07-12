@@ -22,7 +22,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from promptguard._resolve import resolve_credentials
+from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
@@ -47,7 +47,27 @@ class PromptGuardCallbackHandler:
         fail_open: bool = True,
         timeout: float = 10.0,
     ):
+        """Construct the handler.
+
+        Parameters
+        ----------
+        mode:
+            ``"enforce"`` to block policy violations, ``"monitor"`` to log only.
+        scan_responses:
+            Defaults to ``True`` here — unlike ``promptguard.init()`` which
+            defaults to ``False``. The callback already receives ``on_llm_end``
+            events for free, so scanning responses adds no extra call surface
+            and richer coverage is the expected behaviour when a user opts into
+            a framework integration. ``init()`` stays conservative (off) because
+            it is the zero-config drop-in and response scanning doubles the
+            Guard API round-trips per LLM call.
+        timeout:
+            HTTP timeout (seconds) for Guard API calls (default 10s, matching
+            the Guard scan path; the proxy client uses 30s because it fronts the
+            full upstream LLM call).
+        """
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+        validate_mode(mode)
         self._guard = GuardClient(
             api_key=resolved_key,
             base_url=resolved_url,
@@ -282,8 +302,21 @@ class PromptGuardCallbackHandler:
             )
 
         if decision.redacted:
-            logger.info(
-                "PromptGuard redacted content: %s (event=%s, run=%s)",
+            # The callback observes prompts/responses but cannot rewrite them in
+            # flight, so a redact decision can't be applied. In enforce mode we
+            # block rather than let unredacted content proceed; monitor warns.
+            if self._mode == "enforce":
+                logger.error(
+                    "PromptGuard: redaction required but the LangChain callback "
+                    "cannot rewrite in-flight content; blocking (threat=%s, "
+                    "event=%s, run=%s)",
+                    decision.threat_type,
+                    decision.event_id,
+                    run_id,
+                )
+                raise PromptGuardBlockedError(decision)
+            logger.warning(
+                "[monitor] PromptGuard would redact content: %s (event=%s, run=%s)",
                 decision.threat_type,
                 decision.event_id,
                 run_id,
@@ -334,3 +367,12 @@ class PromptGuardCallbackHandler:
         run_key = str(run_id) if run_id else None
         if run_key and run_key in self._chain_context:
             del self._chain_context[run_key]
+
+
+# Framework-disambiguating alias. Both the LangChain and LlamaIndex
+# integrations historically export a class named ``PromptGuardCallbackHandler``;
+# ``LangChainCallbackHandler`` lets callers import both without an alias clash.
+# The original name is retained for backwards compatibility.
+LangChainCallbackHandler = PromptGuardCallbackHandler
+
+__all__ = ["LangChainCallbackHandler", "PromptGuardCallbackHandler"]

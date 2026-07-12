@@ -6,12 +6,16 @@ for security scanning, caching, and cost optimization.
 """
 
 import asyncio
+import dataclasses
 import json
+import math
 import os
 import time
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, TypedDict
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -20,6 +24,10 @@ from promptguard.config import Config
 
 _SDK_LANG = "python"
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+# Codes signalling a hard quota exhaustion that won't recover within the retry
+# window — retrying just burns latency, so surface the error immediately.
+# Keep in sync with the generated QuotaErrorDetail codes (api_types.py).
+_NON_RETRYABLE_ERROR_CODES = {"monthly_quota_exceeded", "spending_limit_exceeded"}
 
 
 class PromptGuardError(Exception):
@@ -75,12 +83,22 @@ def _sdk_headers(api_key: str) -> dict[str, str]:
     }
 
 
-def _parse_error(response: httpx.Response) -> PromptGuardError:
+def _error_dict(response: httpx.Response) -> dict[str, Any]:
+    """Return the ``error`` object from a response body, tolerating non-dict
+    bodies (string/array/null) that would otherwise raise ``AttributeError``
+    and mask the real HTTP error."""
     try:
         data = response.json() if response.content else {}
     except (json.JSONDecodeError, ValueError):
-        data = {}
+        return {}
+    if not isinstance(data, dict):
+        return {}
     err = data.get("error", {})
+    return err if isinstance(err, dict) else {}
+
+
+def _parse_error(response: httpx.Response) -> PromptGuardError:
+    err = _error_dict(response)
     return PromptGuardError(
         message=err.get("message", "Request failed"),
         code=err.get("code", "UNKNOWN"),
@@ -91,6 +109,54 @@ def _parse_error(response: httpx.Response) -> PromptGuardError:
         requests_used=err.get("requests_used"),
         requests_limit=err.get("requests_limit"),
     )
+
+
+def _is_non_retryable_error(response: httpx.Response) -> bool:
+    """True when the response carries an error code we must not retry."""
+    err = _error_dict(response)
+    return err.get("code") in _NON_RETRYABLE_ERROR_CODES or (
+        err.get("type") in _NON_RETRYABLE_ERROR_CODES
+    )
+
+
+# Upper bound on any honored Retry-After. A hostile or buggy upstream can send
+# ``inf``, ``1e300`` or a date centuries out; without a cap the client would
+# sleep effectively forever, so clamp to a sane ceiling.
+_MAX_RETRY_AFTER_SECONDS = 60.0
+
+
+def _bounded_delay(seconds: float) -> float | None:
+    """Clamp a parsed Retry-After delay to a finite, sane window.
+
+    NaN is unparseable → treated as absent. ``inf`` and absurdly large finite
+    values collapse to the ceiling.
+    """
+    if math.isnan(seconds):
+        return None
+    if not math.isfinite(seconds):  # +inf/-inf
+        return _MAX_RETRY_AFTER_SECONDS
+    return min(_MAX_RETRY_AFTER_SECONDS, max(0.0, seconds))
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Parse a ``Retry-After`` header (delta-seconds or HTTP-date) if present."""
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return _bounded_delay(float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return _bounded_delay((when - datetime.now(timezone.utc)).total_seconds())
 
 
 _DEFAULT_PROXY_BASE_URL = "https://api.promptguard.co/api/v1/proxy"
@@ -124,8 +190,19 @@ def _init_config(
     max_retries: int | None = None,
     retry_delay: float | None = None,
 ) -> Config:
-    if config:
-        return config
+    if config is not None:
+        # A hand-built Config must get the same treatment as the kwargs path:
+        # normalize base_url to the /proxy endpoint and fall back to the API
+        # key env var when it was left empty.  Do this on a private copy via
+        # ``dataclasses.replace`` so the caller's Config is never mutated.
+        updates: dict[str, Any] = {"base_url": _ensure_proxy_suffix(config.base_url)}
+        if not config.api_key:
+            updates["api_key"] = os.environ.get("PROMPTGUARD_API_KEY", "")
+        if max_retries is not None:
+            updates["max_retries"] = max(0, max_retries)
+        if retry_delay is not None:
+            updates["retry_delay"] = max(0.0, retry_delay)
+        return dataclasses.replace(config, **updates)
     resolved_base = base_url or os.environ.get("PROMPTGUARD_BASE_URL", _DEFAULT_PROXY_BASE_URL)
     cfg = Config(
         api_key=api_key or os.environ.get("PROMPTGUARD_API_KEY", ""),
@@ -176,12 +253,27 @@ class ChatCompletions:
             json=payload,
             headers=_sdk_headers(self._client.config.api_key),
         ) as response:
+            if response.status_code >= 400:
+                # Read the (streamed) body so _parse_error can inspect it,
+                # then surface a proper error instead of an empty iterator.
+                response.read()
+                raise _parse_error(response)
             for line in response.iter_lines():
                 if line.startswith("data: "):
                     data = line[6:]
                     if data == "[DONE]":
                         break
-                    yield json.loads(data)
+                    # A malformed SSE data line is a protocol violation; surface
+                    # it as a typed error with context rather than letting a bare
+                    # JSONDecodeError escape the generator.
+                    try:
+                        yield json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise PromptGuardError(
+                            message=f"Malformed SSE data line from stream: {exc}",
+                            code="INVALID_STREAM_DATA",
+                            status_code=0,
+                        ) from exc
 
 
 class Chat:
@@ -303,7 +395,7 @@ class Agent:
         )
 
     def stats(self, agent_id: str) -> dict[str, Any]:
-        return self._client._request("GET", f"/agent/{agent_id}/stats")
+        return self._client._request("GET", f"/agent/{quote(agent_id, safe='')}/stats")
 
 
 class RedTeam:
@@ -318,7 +410,7 @@ class RedTeam:
     def run_test(self, test_name: str, target_preset: str = "default") -> dict[str, Any]:
         return self._client._request(
             "POST",
-            f"{self._BASE}/test/{test_name}",
+            f"{self._BASE}/test/{quote(test_name, safe='')}",
             json={"target_preset": target_preset},
         )
 
@@ -375,7 +467,7 @@ class PromptGuard:
         api_key: str | None = None,
         base_url: str | None = None,
         config: Config | None = None,
-        timeout: float = 30.0,
+        timeout: float | None = None,
         max_retries: int | None = None,
         retry_delay: float | None = None,
     ):
@@ -386,7 +478,8 @@ class PromptGuard:
                 "PROMPTGUARD_API_KEY environment variable. "
                 "Get a key at https://app.promptguard.co"
             )
-        self._http = httpx.Client(timeout=timeout)
+        # An explicit timeout= wins; otherwise honor the Config value.
+        self._http = httpx.Client(timeout=timeout if timeout is not None else self.config.timeout)
         self.chat = Chat(self)
         self.completions = Completions(self)
         self.embeddings = Embeddings(self)
@@ -413,14 +506,25 @@ class PromptGuard:
             if (
                 response.status_code in _RETRYABLE_STATUS_CODES
                 and attempt < self.config.max_retries
+                and not _is_non_retryable_error(response)
             ):
-                time.sleep(self.config.retry_delay * (2**attempt))
+                delay = _retry_after_seconds(response)
+                if delay is None:
+                    delay = self.config.retry_delay * (2**attempt)
+                time.sleep(delay)
                 continue
 
             if response.status_code >= 400:
                 raise _parse_error(response)
 
-            data: dict[str, Any] = response.json()
+            try:
+                data: dict[str, Any] = response.json()
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise PromptGuardError(
+                    message=f"API returned a {response.status_code} with a non-JSON body",
+                    code="INVALID_RESPONSE",
+                    status_code=response.status_code,
+                ) from exc
             return data
 
         if last_exc:
@@ -476,12 +580,27 @@ class AsyncChatCompletions:
             json=payload,
             headers=_sdk_headers(self._client.config.api_key),
         ) as response:
+            if response.status_code >= 400:
+                # Read the (streamed) body so _parse_error can inspect it,
+                # then surface a proper error instead of an empty iterator.
+                await response.aread()
+                raise _parse_error(response)
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
                     data = line[6:]
                     if data == "[DONE]":
                         break
-                    yield json.loads(data)
+                    # A malformed SSE data line is a protocol violation; surface
+                    # it as a typed error with context rather than letting a bare
+                    # JSONDecodeError escape the generator.
+                    try:
+                        yield json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise PromptGuardError(
+                            message=f"Malformed SSE data line from stream: {exc}",
+                            code="INVALID_STREAM_DATA",
+                            status_code=0,
+                        ) from exc
 
 
 class AsyncChat:
@@ -601,7 +720,7 @@ class AsyncAgent:
         )
 
     async def stats(self, agent_id: str) -> dict[str, Any]:
-        return await self._client._request("GET", f"/agent/{agent_id}/stats")
+        return await self._client._request("GET", f"/agent/{quote(agent_id, safe='')}/stats")
 
 
 class AsyncRedTeam:
@@ -616,7 +735,7 @@ class AsyncRedTeam:
     async def run_test(self, test_name: str, target_preset: str = "default") -> dict[str, Any]:
         return await self._client._request(
             "POST",
-            f"{self._BASE}/test/{test_name}",
+            f"{self._BASE}/test/{quote(test_name, safe='')}",
             json={"target_preset": target_preset},
         )
 
@@ -670,7 +789,7 @@ class PromptGuardAsync:
         api_key: str | None = None,
         base_url: str | None = None,
         config: Config | None = None,
-        timeout: float = 30.0,
+        timeout: float | None = None,
         max_retries: int | None = None,
         retry_delay: float | None = None,
     ):
@@ -681,7 +800,10 @@ class PromptGuardAsync:
                 "PROMPTGUARD_API_KEY environment variable. "
                 "Get a key at https://app.promptguard.co"
             )
-        self._http = httpx.AsyncClient(timeout=timeout)
+        # An explicit timeout= wins; otherwise honor the Config value.
+        self._http = httpx.AsyncClient(
+            timeout=timeout if timeout is not None else self.config.timeout
+        )
         self.chat = AsyncChat(self)
         self.completions = AsyncCompletions(self)
         self.embeddings = AsyncEmbeddings(self)
@@ -708,14 +830,25 @@ class PromptGuardAsync:
             if (
                 response.status_code in _RETRYABLE_STATUS_CODES
                 and attempt < self.config.max_retries
+                and not _is_non_retryable_error(response)
             ):
-                await asyncio.sleep(self.config.retry_delay * (2**attempt))
+                delay = _retry_after_seconds(response)
+                if delay is None:
+                    delay = self.config.retry_delay * (2**attempt)
+                await asyncio.sleep(delay)
                 continue
 
             if response.status_code >= 400:
                 raise _parse_error(response)
 
-            data: dict[str, Any] = response.json()
+            try:
+                data: dict[str, Any] = response.json()
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise PromptGuardError(
+                    message=f"API returned a {response.status_code} with a non-JSON body",
+                    code="INVALID_RESPONSE",
+                    status_code=response.status_code,
+                ) from exc
             return data
 
         if last_exc:

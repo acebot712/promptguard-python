@@ -28,7 +28,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from promptguard._resolve import resolve_credentials
+from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
@@ -46,6 +46,7 @@ class PromptGuardGuardrail:
         timeout: float = 10.0,
     ):
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+        validate_mode(mode)
         self._guard = GuardClient(
             api_key=resolved_key,
             base_url=resolved_url,
@@ -63,12 +64,31 @@ class PromptGuardGuardrail:
         context = {"framework": "crewai", "metadata": {"hook": "before_kickoff"}}
         decision = self._scan_and_check(messages, "input", context)
 
-        if decision and decision.redacted and decision.redacted_messages:
+        if decision and decision.redacted:
+            redacted_messages = decision.redacted_messages or []
+            # A redacted_messages list shorter than the scanned messages would
+            # leave the unmatched trailing inputs unredacted, so a missing,
+            # empty, or partial list cannot be honored.
+            is_partial = len(redacted_messages) < len(messages)
             if self._mode == "enforce":
-                return self._apply_redaction(inputs, decision.redacted_messages)
+                if redacted_messages and not is_partial:
+                    return self._apply_redaction(inputs, redacted_messages)
+                # Fail safe: forwarding the original inputs would leak the
+                # exact content the guard asked us to redact, so block.
+                logger.error(
+                    "PromptGuard: redact decision could not be applied to crew "
+                    "inputs (%d redacted messages for %d scanned); blocking to "
+                    "avoid forwarding unredacted content (threat=%s, event=%s)",
+                    len(redacted_messages),
+                    len(messages),
+                    decision.threat_type,
+                    decision.event_id,
+                )
+                raise PromptGuardBlockedError(decision)
             logger.warning(
-                "[monitor] PromptGuard would redact crew input: %s",
+                "[monitor] PromptGuard would redact crew input: %s (event=%s)",
                 decision.threat_type,
+                decision.event_id,
             )
 
         return inputs
@@ -81,7 +101,8 @@ class PromptGuardGuardrail:
 
         messages = [{"role": "assistant", "content": text}]
         context = {"framework": "crewai", "metadata": {"hook": "after_kickoff"}}
-        self._scan_and_check(messages, "output", context)
+        decision = self._scan_and_check(messages, "output", context)
+        self._enforce_output_redaction(decision, hook="after_kickoff")
         return result
 
     def scan_task_output(self, output: str, task_name: str = "unknown") -> str:
@@ -91,7 +112,8 @@ class PromptGuardGuardrail:
             "framework": "crewai",
             "metadata": {"hook": "task_output", "task_name": task_name},
         }
-        self._scan_and_check(messages, "output", context)
+        decision = self._scan_and_check(messages, "output", context)
+        self._enforce_output_redaction(decision, hook=f"task_output:{task_name}")
         return output
 
     # -- Internal helpers ----------------------------------------------------
@@ -125,6 +147,33 @@ class PromptGuardGuardrail:
             )
 
         return decision
+
+    def _enforce_output_redaction(self, decision: GuardDecision | None, *, hook: str) -> None:
+        """Handle a redact decision on an output-direction scan.
+
+        A CrewAI after/task callback observes the finished output but cannot
+        safely rewrite the crew's result in place, so — mirroring the
+        langchain/llamaindex posture — in enforce mode we block rather than let
+        unredacted content through; in monitor mode we warn.
+        """
+        if decision is None or not decision.redacted:
+            return
+        if self._mode == "enforce":
+            logger.error(
+                "PromptGuard: redaction required for crew output (%s) but the "
+                "callback cannot rewrite the result in place; blocking to avoid "
+                "returning unredacted content (threat=%s, event=%s)",
+                hook,
+                decision.threat_type,
+                decision.event_id,
+            )
+            raise PromptGuardBlockedError(decision)
+        logger.warning(
+            "[monitor] PromptGuard would redact crew output (%s): %s (event=%s)",
+            hook,
+            decision.threat_type,
+            decision.event_id,
+        )
 
     @staticmethod
     def _inputs_to_messages(inputs: dict[str, Any]) -> list[dict[str, str]]:
@@ -160,6 +209,7 @@ def secure_tool(
 ) -> Callable:
     """Decorator to wrap a CrewAI tool's ``_run`` method with PromptGuard."""
     resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+    validate_mode(mode)
     guard = GuardClient(api_key=resolved_key, base_url=resolved_url)
 
     def decorator(cls):
@@ -182,6 +232,13 @@ def secure_tool(
                     direction="input",
                     context=context,
                 )
+            except Exception:
+                if not fail_open:
+                    raise
+                logger.warning("Guard API unavailable, allowing tool run (fail_open=True)")
+                decision = None
+
+            if decision is not None:
                 if decision.blocked:
                     if mode == "enforce":
                         raise PromptGuardBlockedError(decision)
@@ -190,11 +247,25 @@ def secure_tool(
                         tool_name,
                         decision.threat_type,
                     )
-            except PromptGuardBlockedError:
-                raise
-            except Exception:
-                if not fail_open:
-                    raise
+                if decision.redacted:
+                    # A wrapped tool has no safe way to rewrite its own args, so
+                    # in enforce mode we block rather than forward the original
+                    # (unredacted) input — mirroring _base._handle_pre_scan_decision.
+                    if mode == "enforce":
+                        logger.error(
+                            "PromptGuard: redaction required for tool %s but the "
+                            "tool wrapper cannot rewrite input in place; blocking "
+                            "to avoid forwarding unredacted content (threat=%s, event=%s)",
+                            tool_name,
+                            decision.threat_type,
+                            decision.event_id,
+                        )
+                        raise PromptGuardBlockedError(decision)
+                    logger.warning(
+                        "[monitor] PromptGuard would redact tool %s input: %s",
+                        tool_name,
+                        decision.threat_type,
+                    )
 
             return original_run(self, *args, **kwargs)
 

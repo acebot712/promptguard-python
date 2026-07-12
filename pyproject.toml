@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "promptguard-sdk"
-version = "1.9.0"
+dynamic = ["version"]
 description = "Drop-in security for AI applications - AI Firewall SDK"
 readme = "README.md"
 license = "MIT"
@@ -65,6 +65,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=6.0.0",
     "ruff==0.15.20",
+    "mypy>=1.11.0",
     "pre-commit>=4.0.0",
 ]
 
@@ -74,8 +75,13 @@ Documentation = "https://docs.promptguard.co"
 Repository = "https://github.com/acebot712/promptguard-python"
 Issues = "https://github.com/acebot712/promptguard-python/issues"
 
+[tool.hatch.version]
+path = "promptguard/_version.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["promptguard"]
+# Ship the PEP 561 marker so downstream mypy/pyright treat the SDK as typed.
+artifacts = ["promptguard/py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -124,7 +130,7 @@ source = ["promptguard"]
 omit = ["promptguard/generated/*"]
 
 [tool.coverage.report]
-fail_under = 50
+fail_under = 60
 show_missing = true
 skip_empty = true
 
