@@ -175,6 +175,27 @@ The handler scans:
 - `on_tool_start` - tool inputs for injection attempts
 - `on_chain_start/end` - tracks chain context
 
+The callback can only *observe* (block or warn). To scan **and redact** content
+inline in an LCEL chain, use `PromptGuardRunnable`, which sits in the data flow
+and returns the redacted value on a `redact` decision:
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from promptguard.integrations.langchain import PromptGuardRunnable
+
+guard_in = PromptGuardRunnable(api_key="pg_live_xxx").as_runnable()
+guard_out = PromptGuardRunnable(api_key="pg_live_xxx", direction="output").as_runnable()
+
+prompt = ChatPromptTemplate.from_template("Answer: {input}")
+chain = guard_in | prompt | ChatOpenAI(model="gpt-5-nano") | StrOutputParser() | guard_out
+
+chain.invoke("user question")  # raises PromptGuardBlockedError on a block
+```
+
+Requires the `langchain` extra: `pip install promptguard-sdk[langchain]`.
+
 ### CrewAI
 
 ```python
@@ -220,6 +241,21 @@ Settings.callback_manager = CallbackManager([pg_handler])
 
 # All LlamaIndex queries are now scanned
 ```
+
+To scan **and redact** a query inline in a `QueryPipeline` (the callback can only
+observe), drop `PromptGuardQueryGuard` in as a preprocessing component:
+
+```python
+from llama_index.core.query_pipeline import QueryPipeline
+from promptguard.integrations.llamaindex import PromptGuardQueryGuard
+
+guard = PromptGuardQueryGuard(api_key="pg_live_xxx")
+
+pipeline = QueryPipeline(chain=[guard.as_query_component(), retriever, synthesizer])
+pipeline.run(input="user question")  # raises PromptGuardBlockedError on a block
+```
+
+Requires the `llamaindex` extra: `pip install promptguard-sdk[llamaindex]`.
 
 ## Standalone Guard API
 

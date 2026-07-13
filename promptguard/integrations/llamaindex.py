@@ -311,9 +311,141 @@ class PromptGuardCallbackHandler:
             )
 
 
+def _require_fn_component() -> Any:
+    """Lazily import ``FnComponent`` from ``llama_index.core``.
+
+    Kept out of module scope so importing
+    ``promptguard.integrations.llamaindex`` never requires LlamaIndex to be
+    installed (the callback handler duck-types the interface). Only the inline
+    query-pipeline component needs the real class.
+    """
+    try:
+        from llama_index.core.query_pipeline import FnComponent
+    except ImportError as exc:  # pragma: no cover - exercised via monkeypatch
+        raise ImportError(
+            "The LlamaIndex query guard requires 'llama-index-core', which is "
+            "not installed. Install it with: pip install promptguard-sdk[llamaindex]"
+        ) from exc
+    return FnComponent
+
+
+class PromptGuardQueryGuard:
+    """Inline LlamaIndex guard that scans (and can redact) a query string.
+
+    Unlike :class:`PromptGuardCallbackHandler`, which only *observes* events and
+    can therefore block but never rewrite them, this guard is a pipeline
+    component that sits **in** the data flow. It scans the query before
+    retrieval/synthesis, raising :class:`PromptGuardBlockedError` on a ``block``
+    decision and returning the redacted query on a ``redact`` decision. Drop it
+    at the head of a ``QueryPipeline``::
+
+        from promptguard.integrations.llamaindex import PromptGuardQueryGuard
+        from llama_index.core.query_pipeline import QueryPipeline
+
+        guard = PromptGuardQueryGuard(api_key="pg_live_xxx")
+        pipeline = QueryPipeline(chain=[guard.as_query_component(), retriever])
+        pipeline.run(input="user question")
+
+    ``guard_query`` is also usable directly as a plain preprocessor function
+    (no LlamaIndex import required) if you are not building a ``QueryPipeline``.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        mode: str = "enforce",
+        fail_open: bool = True,
+        timeout: float = 10.0,
+    ):
+        resolved_key, resolved_url = resolve_credentials(api_key, base_url)
+        validate_mode(mode)
+        self._guard = GuardClient(
+            api_key=resolved_key,
+            base_url=resolved_url,
+            timeout=timeout,
+        )
+        self._mode = mode
+        self._fail_open = fail_open
+
+    def guard_query(self, query_str: str) -> str:
+        """Scan ``query_str``; return it (possibly redacted) or raise on a block."""
+        text = str(query_str)
+        messages = [{"role": "user", "content": text}]
+        context = {
+            "framework": "llamaindex",
+            "metadata": {"event_type": _QUERY_EVENT, "stage": "preprocess"},
+        }
+        decision = self._safe_scan(messages, "input", None, context)
+        if decision is None or decision.allowed:
+            return text
+
+        if decision.blocked:
+            if self._mode == "enforce":
+                raise PromptGuardBlockedError(decision)
+            logger.warning(
+                "[monitor] PromptGuard would block query: %s (event=%s)",
+                decision.threat_type,
+                decision.event_id,
+            )
+            return text
+
+        # redact
+        if self._mode != "enforce":
+            logger.warning(
+                "[monitor] PromptGuard would redact query: %s (event=%s)",
+                decision.threat_type,
+                decision.event_id,
+            )
+            return text
+
+        redacted = decision.redacted_messages or []
+        if redacted and isinstance(redacted[0].get("content"), str):
+            return redacted[0]["content"]
+
+        # No usable redaction payload — fail safe rather than forward the
+        # flagged query unredacted.
+        logger.error(
+            "PromptGuard: redaction required but no redacted query was returned; "
+            "blocking (threat=%s, event=%s)",
+            decision.threat_type,
+            decision.event_id,
+        )
+        raise PromptGuardBlockedError(decision)
+
+    def as_query_component(self) -> Any:
+        """Wrap :meth:`guard_query` in a LlamaIndex ``FnComponent``."""
+        fn_component = _require_fn_component()
+        return fn_component(fn=self.guard_query)
+
+    def _safe_scan(
+        self,
+        messages: list[dict[str, str]],
+        direction: str,
+        model: str | None,
+        context: dict[str, Any] | None,
+    ) -> GuardDecision | None:
+        try:
+            return self._guard.scan(
+                messages=messages,
+                direction=direction,
+                model=model,
+                context=context,
+            )
+        except Exception:
+            if not self._fail_open:
+                raise
+            logger.warning("Guard API unavailable (fail_open=True)")
+            return None
+
+
 # Framework-disambiguating alias so callers can import both the LangChain and
 # LlamaIndex handlers without an alias clash (both historically export
 # ``PromptGuardCallbackHandler``). The original name is kept for back-compat.
 LlamaIndexCallbackHandler = PromptGuardCallbackHandler
 
-__all__ = ["LlamaIndexCallbackHandler", "PromptGuardCallbackHandler"]
+__all__ = [
+    "LlamaIndexCallbackHandler",
+    "PromptGuardCallbackHandler",
+    "PromptGuardQueryGuard",
+]
