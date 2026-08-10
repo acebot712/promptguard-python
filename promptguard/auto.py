@@ -244,6 +244,21 @@ _KNOWN_UNPATCHED: dict[str, str] = {
     "google.cloud.aiplatform": "google-cloud-aiplatform",
 }
 
+# Frameworks are DELIBERATELY absent from the list above, and the reason was
+# verified on 2026-08-11 rather than assumed:
+#
+#   litellm 1.96.0 depends on `openai>=2.20.0` and its OpenAI path imports it,
+#   so litellm -- and CrewAI, which routes through it -- IS covered by our
+#   `openai` patch for OpenAI-family models. Warning about it would be a false
+#   alarm, and a report that cries wolf is one people stop reading.
+#
+# The JS side is the opposite and is listed there: `@ai-sdk/openai` does not
+# depend on the `openai` package at all, so the Vercel AI SDK is covered by the
+# proxy and by nothing else.
+#
+# Neither fact is stable. Both are one dependency bump from flipping, which is
+# why they are recorded here with a date instead of held in someone's head.
+
 _ADVICE_URL = "https://docs.promptguard.co/integrations/auto-instrumentation"
 
 
