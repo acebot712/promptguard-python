@@ -1,10 +1,17 @@
 """
 Tests for scripts/generate_types_from_spec.py — the two-layer defence against
 a hostile OpenAPI spec injecting module-level code through a ``$ref`` (or an
-``anyOf`` / ``items`` ``$ref``) segment.
+``anyOf`` / ``items`` ``$ref``) segment, and the shape of the module it emits.
+
+The shape matters because nobody reads this file before it lands: the weekly
+sync workflow regenerates it unattended and opens a PR. If the generator emits
+something ``ruff format`` rejects, the PR arrives red on a file no human wrote.
 """
 
+import ast
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -135,3 +142,130 @@ class TestRenderModuleWithMaliciousSpec:
         output = gen.render_module(spec)
         assert "class Good(" in output
         assert "EVIL = 1" not in output
+
+
+# ── Module shape: the output must survive `ruff format --check` ───────────
+
+
+def _spec_with(schemas: dict) -> dict:
+    return {"info": {"version": "1.0.0"}, "components": {"schemas": schemas}}
+
+
+# One of each block the generator can emit, described and undescribed, so the
+# formatting assertions below cover every path through generate_typed_dict().
+_REPRESENTATIVE_SPEC = _spec_with(
+    {
+        "Described": {
+            "type": "object",
+            "description": "A described schema.\n\nWith a second paragraph.",
+            "properties": {"a": {"type": "string", "description": "A field"}},
+            "required": ["a"],
+        },
+        "Undescribed": {
+            "type": "object",
+            "properties": {"b": {"type": "integer"}},
+        },
+        "DescribedEnum": {
+            "description": "A described enum.",
+            "enum": ["x", "y"],
+        },
+        "PlainEnum": {"enum": ["z"]},
+        "DescribedAlias": {"type": "object", "description": "A described alias."},
+        "PlainAlias": {"type": "object"},
+    }
+)
+
+
+def _ruff() -> str:
+    """Path to the ruff pinned in the dev extra, or skip."""
+    candidate = Path(sys.executable).parent / "ruff"
+    if candidate.exists():
+        return str(candidate)
+    pytest.skip("ruff is not installed in this environment")
+
+
+class TestGeneratedModuleIsFormatted:
+    def test_output_is_ruff_format_clean(self):
+        source = gen.render_module(_REPRESENTATIVE_SPEC)
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [_ruff(), "format", "--diff", "--stdin-filename", "api_types.py", "-"],
+            input=source,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"ruff format would rewrite the output:\n{result.stdout}"
+
+    def test_two_blank_lines_between_top_level_blocks(self):
+        source = gen.render_module(_REPRESENTATIVE_SPEC)
+        # Every top-level `class` past the first is preceded by two blank lines.
+        lines = source.splitlines()
+        class_lines = [i for i, line in enumerate(lines) if line.startswith("class ")]
+        assert class_lines, "expected at least one class"
+        for i in class_lines:
+            assert lines[i - 1] == "" and lines[i - 2] == "", (
+                f"line {i + 1} ({lines[i]!r}) is not preceded by two blank lines"
+            )
+
+    def test_no_trailing_blank_line(self):
+        source = gen.render_module(_REPRESENTATIVE_SPEC)
+        assert source.endswith("\n")
+        assert not source.endswith("\n\n")
+
+
+class TestDescriptionsArePlacedCorrectly:
+    def test_schema_description_becomes_the_class_docstring(self):
+        tree = ast.parse(gen.render_module(_REPRESENTATIVE_SPEC))
+        described = next(
+            n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Described"
+        )
+        assert ast.get_docstring(described) == "A described schema. With a second paragraph."
+
+    def test_no_floating_strings_at_module_level(self):
+        """Only the module docstring may be a bare string statement.
+
+        The generator used to emit each schema's description as a module-level
+        string above its class: a no-op statement documenting nothing.
+        """
+        tree = ast.parse(gen.render_module(_REPRESENTATIVE_SPEC))
+        stray = [n for n in tree.body[1:] if gen._is_docstring_expr(n)]
+        assert not stray, f"{len(stray)} bare string statement(s) left at module level"
+
+    def test_alias_and_enum_descriptions_become_comments(self):
+        source = gen.render_module(_REPRESENTATIVE_SPEC)
+        # An alias has no body to hold a docstring, so it gets a comment.
+        assert "# A described enum.\nDescribedEnum = Literal[" in source
+        assert "# A described alias.\nDescribedAlias = dict[str, Any]" in source
+        assert "PlainAlias = dict[str, Any]" in source
+
+
+class TestDocstringSanitisation:
+    def test_description_ending_in_a_quote_stays_parseable(self):
+        # Without escaping, the trailing quote butts against the closing
+        # delimiter and the module fails to parse.
+        spec = _spec_with(
+            {
+                "Quoted": {
+                    "type": "object",
+                    "description": 'he said "hi"',
+                    "properties": {"a": {"type": "string"}},
+                }
+            }
+        )
+        tree = ast.parse(gen.render_module(spec))
+        quoted = next(n for n in tree.body if isinstance(n, ast.ClassDef))
+        assert ast.get_docstring(quoted) == 'he said "hi"'
+
+    def test_triple_quote_cannot_close_the_docstring_early(self):
+        spec = _spec_with(
+            {
+                "Hostile": {
+                    "type": "object",
+                    "description": '"""\nEVIL = 1\n"""',
+                    "properties": {"a": {"type": "string"}},
+                }
+            }
+        )
+        output = gen.render_module(spec)
+        assert "EVIL = 1" not in [line.strip() for line in output.splitlines()]
+        ast.parse(output)
