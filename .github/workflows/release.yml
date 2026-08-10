@@ -31,6 +31,13 @@ jobs:
           cache: 'pip'
           cache-dependency-path: pyproject.toml
 
+      # A CHANGELOG is only worth having if it is written when the release is
+      # cut. This fails the release rather than letting a version ship with no
+      # entry -- reconstructing them afterwards produces a list of tag subjects,
+      # which is what every entry below 1.11.1 already is.
+      - name: CHANGELOG has an entry for this version
+        run: python scripts/check_changelog.py
+
       - name: Lint
         run: |
           pip install ruff==0.15.20
