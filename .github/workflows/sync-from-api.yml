@@ -65,9 +65,16 @@ jobs:
       # static mount and serves whatever it holds.
       - name: Download latest cross-SDK contract
         run: |
+          # VERIFICATION BRANCH ONLY -- this line is the single substitution that
+          # makes this run provable today. The canonical URL is
+          # https://promptguard.co/contracts/guard-contract.json, which does not
+          # serve until the monorepo change merges to main and Vercel deploys.
+          # Pointed at a v1.5.2 probe contract committed to this branch so the
+          # fetch -> adopt -> test -> diff -> PR path can be watched end to end.
+          # DO NOT MERGE THIS BRANCH.
           curl --retry 3 --retry-delay 2 --fail --silent --show-error \
             -o guard-contract.upstream.json \
-            "https://promptguard.co/contracts/guard-contract.json"
+            "https://raw.githubusercontent.com/acebot712/promptguard-python/verify/sync-fires-probe/.verify/guard-contract-v152.json"
 
       # Writes tests/guard-contract.json AND tests/guard-contract.lock.json.
       # Nothing is pushed here -- the test run below decides whether this
