@@ -1,7 +1,6 @@
 {
   "_description": "Shared contract tests for PromptGuard SDKs. Both Python and Node SDKs MUST pass all cases in this file. If you add a feature to one SDK, add a test case here first.",
-  "_version": "1.5.1",
-
+  "_version": "1.5.2",
   "guard_decision": {
     "description": "GuardDecision must parse these API response bodies correctly.",
     "cases": [
@@ -55,8 +54,19 @@
           "event_id": "evt-redact-1",
           "confidence": 0.88,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "user", "content": "My SSN is [REDACTED]" }],
-          "threats": [{ "type": "pii", "confidence": 0.88, "details": "SSN detected" }],
+          "redacted_messages": [
+            {
+              "role": "user",
+              "content": "My SSN is [REDACTED]"
+            }
+          ],
+          "threats": [
+            {
+              "type": "pii",
+              "confidence": 0.88,
+              "details": "SSN detected"
+            }
+          ],
           "latency_ms": 8.1
         },
         "expect": {
@@ -86,24 +96,52 @@
           "latency_ms": 1.0
         },
         "expect_error": "GuardApiError"
+      },
+      {
+        "name": "block_decision_without_threat_details",
+        "input": {
+          "decision": "block",
+          "event_id": "evt-sync-probe-1",
+          "confidence": 0.77,
+          "threat_type": "data_exfiltration",
+          "threats": [],
+          "latency_ms": 4.4
+        },
+        "expect": {
+          "allowed": false,
+          "blocked": true,
+          "redacted": false,
+          "event_id": "evt-sync-probe-1",
+          "confidence": 0.77,
+          "threat_type": "data_exfiltration"
+        }
       }
     ]
   },
-
   "redaction_enforcement": {
-    "description": "How the shared patch wrapper must handle a redact decision (added in v1.5.0, audit round 4 findings 1-2; `direction` added in v1.5.1, audit round 5 finding 1). Each case drives the SDK's central decision handling with `scanned_messages` (the guard messages that were scanned), a `decision` API body, a `mode`, `has_redaction_applier` (whether the SDK patch supplies a redaction handler for this call shape), and an optional `direction` ('input' when absent). `expect` is one of: 'apply' (the redacted contents MUST be forwarded to the wrapped call), 'block' (the SDK's blocked error MUST be raised; for direction 'input' the wrapped call MUST NOT run, for direction 'output' the error is raised AFTER the wrapped call so the response is never returned to the caller), 'passthrough' (monitor mode only: warn and forward the ORIGINAL content unchanged / return the ORIGINAL response). Input direction: a redact decision whose redacted_messages are missing, empty, or SHORTER than the scanned messages cannot be honored and must escalate to block in enforce mode. Output direction (`direction`: 'output'): the case drives the SDK's response-scan handling (responses scanning enabled, `scanned_messages` is the assistant response that was scanned) — an LLM response cannot be rewritten in flight, so a redact decision on the output must ALWAYS block in enforce mode (even with a full redacted_messages payload and an applier present) and warn+passthrough in monitor mode.",
+    "description": "How the shared patch wrapper must handle a redact decision (added in v1.5.0, audit round 4 findings 1-2; `direction` added in v1.5.1, audit round 5 finding 1). Each case drives the SDK's central decision handling with `scanned_messages` (the guard messages that were scanned), a `decision` API body, a `mode`, `has_redaction_applier` (whether the SDK patch supplies a redaction handler for this call shape), and an optional `direction` ('input' when absent). `expect` is one of: 'apply' (the redacted contents MUST be forwarded to the wrapped call), 'block' (the SDK's blocked error MUST be raised; for direction 'input' the wrapped call MUST NOT run, for direction 'output' the error is raised AFTER the wrapped call so the response is never returned to the caller), 'passthrough' (monitor mode only: warn and forward the ORIGINAL content unchanged / return the ORIGINAL response). Input direction: a redact decision whose redacted_messages are missing, empty, or SHORTER than the scanned messages cannot be honored and must escalate to block in enforce mode. Output direction (`direction`: 'output'): the case drives the SDK's response-scan handling (responses scanning enabled, `scanned_messages` is the assistant response that was scanned) \u2014 an LLM response cannot be rewritten in flight, so a redact decision on the output must ALWAYS block in enforce mode (even with a full redacted_messages payload and an applier present) and warn+passthrough in monitor mode.",
     "cases": [
       {
         "name": "redact_with_full_payload_applies_in_enforce",
         "mode": "enforce",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "user", "content": "My SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-1",
           "confidence": 0.9,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "user", "content": "My SSN is [REDACTED]" }],
+          "redacted_messages": [
+            {
+              "role": "user",
+              "content": "My SSN is [REDACTED]"
+            }
+          ],
           "threats": [],
           "latency_ms": 1.0
         },
@@ -113,7 +151,12 @@
         "name": "redact_without_payload_blocks_in_enforce",
         "mode": "enforce",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "user", "content": "My SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-2",
@@ -128,7 +171,12 @@
         "name": "redact_with_empty_payload_blocks_in_enforce",
         "mode": "enforce",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "user", "content": "My SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-3",
@@ -145,15 +193,26 @@
         "mode": "enforce",
         "has_redaction_applier": true,
         "scanned_messages": [
-          { "role": "user", "content": "My SSN is 123-45-6789" },
-          { "role": "user", "content": "My card is 4111-1111-1111-1111" }
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          },
+          {
+            "role": "user",
+            "content": "My card is 4111-1111-1111-1111"
+          }
         ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-4",
           "confidence": 0.9,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "user", "content": "My SSN is [REDACTED]" }],
+          "redacted_messages": [
+            {
+              "role": "user",
+              "content": "My SSN is [REDACTED]"
+            }
+          ],
           "threats": [],
           "latency_ms": 1.0
         },
@@ -163,13 +222,23 @@
         "name": "redact_without_applier_blocks_in_enforce",
         "mode": "enforce",
         "has_redaction_applier": false,
-        "scanned_messages": [{ "role": "user", "content": "My SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-5",
           "confidence": 0.9,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "user", "content": "My SSN is [REDACTED]" }],
+          "redacted_messages": [
+            {
+              "role": "user",
+              "content": "My SSN is [REDACTED]"
+            }
+          ],
           "threats": [],
           "latency_ms": 1.0
         },
@@ -179,15 +248,26 @@
         "name": "redact_with_extra_payload_applies_in_enforce",
         "mode": "enforce",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "user", "content": "My SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-6",
           "confidence": 0.9,
           "threat_type": "pii",
           "redacted_messages": [
-            { "role": "user", "content": "My SSN is [REDACTED]" },
-            { "role": "user", "content": "extra entry is ignored" }
+            {
+              "role": "user",
+              "content": "My SSN is [REDACTED]"
+            },
+            {
+              "role": "user",
+              "content": "extra entry is ignored"
+            }
           ],
           "threats": [],
           "latency_ms": 1.0
@@ -198,7 +278,12 @@
         "name": "redact_without_payload_passes_through_in_monitor",
         "mode": "monitor",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "user", "content": "My SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-7",
@@ -214,15 +299,26 @@
         "mode": "monitor",
         "has_redaction_applier": true,
         "scanned_messages": [
-          { "role": "user", "content": "My SSN is 123-45-6789" },
-          { "role": "user", "content": "My card is 4111-1111-1111-1111" }
+          {
+            "role": "user",
+            "content": "My SSN is 123-45-6789"
+          },
+          {
+            "role": "user",
+            "content": "My card is 4111-1111-1111-1111"
+          }
         ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-8",
           "confidence": 0.9,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "user", "content": "My SSN is [REDACTED]" }],
+          "redacted_messages": [
+            {
+              "role": "user",
+              "content": "My SSN is [REDACTED]"
+            }
+          ],
           "threats": [],
           "latency_ms": 1.0
         },
@@ -230,17 +326,27 @@
       },
       {
         "name": "output_redact_blocks_in_enforce",
-        "_comment": "A redact decision on an LLM RESPONSE can never be applied (the response already exists and cannot be rewritten in flight) — enforce mode must raise the blocked error even though redacted_messages is complete and an applier exists (audit round 5, finding 1).",
+        "_comment": "A redact decision on an LLM RESPONSE can never be applied (the response already exists and cannot be rewritten in flight) \u2014 enforce mode must raise the blocked error even though redacted_messages is complete and an applier exists (audit round 5, finding 1).",
         "mode": "enforce",
         "direction": "output",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "assistant", "content": "Your SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "assistant",
+            "content": "Your SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-9",
           "confidence": 0.9,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "assistant", "content": "Your SSN is [REDACTED]" }],
+          "redacted_messages": [
+            {
+              "role": "assistant",
+              "content": "Your SSN is [REDACTED]"
+            }
+          ],
           "threats": [],
           "latency_ms": 1.0
         },
@@ -251,13 +357,23 @@
         "mode": "monitor",
         "direction": "output",
         "has_redaction_applier": true,
-        "scanned_messages": [{ "role": "assistant", "content": "Your SSN is 123-45-6789" }],
+        "scanned_messages": [
+          {
+            "role": "assistant",
+            "content": "Your SSN is 123-45-6789"
+          }
+        ],
         "decision": {
           "decision": "redact",
           "event_id": "evt-re-10",
           "confidence": 0.9,
           "threat_type": "pii",
-          "redacted_messages": [{ "role": "assistant", "content": "Your SSN is [REDACTED]" }],
+          "redacted_messages": [
+            {
+              "role": "assistant",
+              "content": "Your SSN is [REDACTED]"
+            }
+          ],
           "threats": [],
           "latency_ms": 1.0
         },
@@ -265,19 +381,30 @@
       }
     ]
   },
-
   "message_conversion": {
     "description": "OpenAI-style messages must be converted to guard format identically across SDKs.",
     "cases": [
       {
         "name": "simple_text_messages",
         "input": [
-          { "role": "system", "content": "You are helpful." },
-          { "role": "user", "content": "Hello" }
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "user",
+            "content": "Hello"
+          }
         ],
         "expect": [
-          { "role": "system", "content": "You are helpful." },
-          { "role": "user", "content": "Hello" }
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "user",
+            "content": "Hello"
+          }
         ]
       },
       {
@@ -286,12 +413,25 @@
           {
             "role": "user",
             "content": [
-              { "type": "text", "text": "What is in this image?" },
-              { "type": "image_url", "image_url": { "url": "https://example.com/img.png" } }
+              {
+                "type": "text",
+                "text": "What is in this image?"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.com/img.png"
+                }
+              }
             ]
           }
         ],
-        "expect": [{ "role": "user", "content": "What is in this image?" }]
+        "expect": [
+          {
+            "role": "user",
+            "content": "What is in this image?"
+          }
+        ]
       },
       {
         "name": "empty_messages_returns_empty",
@@ -300,58 +440,123 @@
       }
     ]
   },
-
   "anthropic_message_conversion": {
     "description": "Anthropic messages with separate system param must be handled identically.",
     "cases": [
       {
         "name": "string_system_prompt",
-        "input_messages": [{ "role": "user", "content": "Hello" }],
+        "input_messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
         "input_system": "Be helpful",
         "expect": [
-          { "role": "system", "content": "Be helpful" },
-          { "role": "user", "content": "Hello" }
+          {
+            "role": "system",
+            "content": "Be helpful"
+          },
+          {
+            "role": "user",
+            "content": "Hello"
+          }
         ]
       },
       {
         "name": "content_block_system_prompt",
-        "input_messages": [{ "role": "user", "content": "Hello" }],
-        "input_system": [{ "type": "text", "text": "Be helpful" }],
+        "input_messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "input_system": [
+          {
+            "type": "text",
+            "text": "Be helpful"
+          }
+        ],
         "expect": [
-          { "role": "system", "content": "Be helpful" },
-          { "role": "user", "content": "Hello" }
+          {
+            "role": "system",
+            "content": "Be helpful"
+          },
+          {
+            "role": "user",
+            "content": "Hello"
+          }
         ]
       },
       {
         "name": "no_system_prompt",
-        "input_messages": [{ "role": "user", "content": "Hello" }],
+        "input_messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
         "input_system": null,
-        "expect": [{ "role": "user", "content": "Hello" }]
+        "expect": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ]
       }
     ]
   },
-
   "google_content_conversion": {
     "description": "Google Generative AI content must be converted identically.",
     "cases": [
       {
         "name": "string_input",
         "input": "Hello world",
-        "expect": [{ "role": "user", "content": "Hello world" }]
+        "expect": [
+          {
+            "role": "user",
+            "content": "Hello world"
+          }
+        ]
       },
       {
         "name": "array_of_strings",
-        "input": ["Hello", "World"],
-        "expect": [{ "role": "user", "content": "Hello" }, { "role": "user", "content": "World" }]
+        "input": [
+          "Hello",
+          "World"
+        ],
+        "expect": [
+          {
+            "role": "user",
+            "content": "Hello"
+          },
+          {
+            "role": "user",
+            "content": "World"
+          }
+        ]
       },
       {
         "name": "content_object_with_parts",
-        "input": [{ "role": "user", "parts": [{ "text": "What is 2+2?" }] }],
-        "expect": [{ "role": "user", "content": "What is 2+2?" }]
+        "input": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "What is 2+2?"
+              }
+            ]
+          }
+        ],
+        "expect": [
+          {
+            "role": "user",
+            "content": "What is 2+2?"
+          }
+        ]
       }
     ]
   },
-
   "blocked_error": {
     "description": "PromptGuardBlockedError must format message consistently.",
     "cases": [
@@ -365,7 +570,11 @@
           "threats": [],
           "latency_ms": 5
         },
-        "expect_message_contains": ["prompt_injection", "0.92", "evt-err-1"]
+        "expect_message_contains": [
+          "prompt_injection",
+          "0.92",
+          "evt-err-1"
+        ]
       },
       {
         "name": "without_threat_type_falls_back_to_policy_violation",
@@ -376,38 +585,63 @@
           "threats": [],
           "latency_ms": 3
         },
-        "expect_message_contains": ["policy_violation"]
+        "expect_message_contains": [
+          "policy_violation"
+        ]
       }
     ]
   },
-
   "guard_request_payload": {
     "description": "GuardClient._build_payload must produce identical JSON.",
     "cases": [
       {
         "name": "minimal_payload",
         "args": {
-          "messages": [{ "role": "user", "content": "Hi" }],
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hi"
+            }
+          ],
           "direction": "input"
         },
         "expect": {
-          "messages": [{ "role": "user", "content": "Hi" }],
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hi"
+            }
+          ],
           "direction": "input"
         }
       },
       {
         "name": "full_payload",
         "args": {
-          "messages": [{ "role": "user", "content": "Hi" }],
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hi"
+            }
+          ],
           "direction": "output",
           "model": "gpt-5-nano",
-          "context": { "framework": "langchain" }
+          "context": {
+            "framework": "langchain"
+          }
         },
         "expect": {
-          "messages": [{ "role": "user", "content": "Hi" }],
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hi"
+            }
+          ],
           "direction": "output",
           "model": "gpt-5-nano",
-          "context": { "framework": "langchain" }
+          "context": {
+            "framework": "langchain"
+          }
         }
       }
     ]
