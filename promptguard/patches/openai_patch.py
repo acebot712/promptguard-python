@@ -29,6 +29,11 @@ logger = logging.getLogger("promptguard")
 
 NAME = "openai"
 
+# Import names that mean "this patch is relevant". `auto.py` compares these
+# against what actually got hooked, so an installed-but-unhooked library is
+# reported by name instead of passing as "customer does not use this provider".
+DETECTS = ("openai",)
+
 # Maps "Completions.create" / "AsyncResponses.create" / ... -> original method.
 _originals: dict[str, Any] = {}
 _patched = False

@@ -105,6 +105,8 @@ def init(
 
     _apply_patches()
 
+    _warn_about_unpatched_libraries()
+
     patched = patched_sdks()
     if patched:
         logger.info(
@@ -121,8 +123,21 @@ def init(
         # for, rather than letting init() succeed with zero signal.
         logger.warning(
             "PromptGuard initialised but found no supported LLM SDK to patch "
-            "(openai/anthropic/google-generativeai/cohere/boto3). "
+            "(openai/anthropic/google-genai/google-generativeai/cohere/boto3). "
             "No calls will be scanned."
+        )
+
+
+def _warn_about_unpatched_libraries() -> None:
+    """Name every installed provider library we did not hook."""
+    for name in _detected_unpatched():
+        logger.warning(
+            "PromptGuard: %r is installed but auto-instrumentation did NOT hook it "
+            "- calls made through it are not being scanned. Point that client at "
+            "the proxy (base_url=<your PromptGuard URL>), or see %s for the exact "
+            "call surfaces we patch.",
+            name,
+            _ADVICE_URL,
         )
 
 
@@ -211,17 +226,106 @@ def _try_revert_patch(patch_module: Any) -> None:
         logger.warning("Failed to revert %s", patch_module.NAME, exc_info=True)
 
 
-def _apply_patches() -> None:
-    """Patch every supported SDK.  Missing packages are silently skipped."""
+# Packages we know about but deliberately do NOT patch, and what to do instead.
+#
+# Every one of these works today through the proxy: point the client's base URL
+# at PromptGuard and its traffic is scanned like anything else. Naming them here
+# is not a promise to hook them -- it is the difference between a customer being
+# told "this is not instrumented, here is the one-line fix" and being told
+# nothing at all while believing they are covered.
+_KNOWN_UNPATCHED: dict[str, str] = {
+    # OpenAI-wire-compatible providers. Their own SDKs are separate packages, so
+    # our `openai` patch does not see them.
+    "groq": "groq",
+    "mistralai": "mistralai",
+    "together": "together",
+    "ollama": "ollama",
+    # Vertex AI is a different client and a different surface from google-genai.
+    "google.cloud.aiplatform": "google-cloud-aiplatform",
+}
+
+_ADVICE_URL = "https://docs.promptguard.co/integrations/auto-instrumentation"
+
+
+def _known_patches() -> list:
+    """Every patch module, in apply order."""
     from promptguard.patches import (
         anthropic_patch,
         bedrock_patch,
         cohere_patch,
+        google_genai_patch,
         google_patch,
         openai_patch,
     )
 
-    for patch_module in [openai_patch, anthropic_patch, google_patch, cohere_patch, bedrock_patch]:
+    return [
+        openai_patch,
+        anthropic_patch,
+        google_genai_patch,
+        google_patch,
+        cohere_patch,
+        bedrock_patch,
+    ]
+
+
+def _detected_unpatched() -> list[str]:
+    """Provider packages that are installed but are NOT being scanned.
+
+    The bug this exists to kill: `init()` used to warn only when it patched
+    NOTHING. A customer with `openai` and `google-genai` installed got "patched
+    SDKs: openai" at INFO and not one word about Gemini -- so the partial case,
+    which is the common case, was silent. An unpatched library is the single
+    most likely reason a customer believes they are protected and is not, so it
+    is reported by name.
+    """
+    import importlib.util
+
+    patched_names = set(patched_sdks())
+    found: list[str] = []
+
+    for patch_module in _known_patches():
+        if patch_module.NAME in patched_names:
+            continue
+        for import_name in getattr(patch_module, "DETECTS", ()):
+            try:
+                spec = importlib.util.find_spec(import_name)
+            except (ImportError, ValueError):
+                spec = None
+            if spec is not None:
+                found.append(import_name)
+
+    for import_name, dist_name in _KNOWN_UNPATCHED.items():
+        try:
+            spec = importlib.util.find_spec(import_name)
+        except (ImportError, ValueError):
+            spec = None
+        if spec is not None:
+            found.append(dist_name)
+
+    return sorted(set(found))
+
+
+def instrumentation_report() -> dict:
+    """What is and is not instrumented, as data rather than a log line.
+
+    A startup warning is only read by someone watching the logs at startup.
+    This is the same information in a form a customer can assert in their own
+    CI::
+
+        assert promptguard.instrumentation_report()["detected_unpatched"] == []
+
+    which turns "we told you" into "you cannot ship without knowing".
+    """
+    return {
+        "patched": patched_sdks(),
+        "detected_unpatched": _detected_unpatched(),
+        "advice_url": _ADVICE_URL,
+    }
+
+
+def _apply_patches() -> None:
+    """Patch every supported SDK.  Missing packages are silently skipped."""
+    for patch_module in _known_patches():
         _try_apply_patch(patch_module)
 
 

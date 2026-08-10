@@ -33,16 +33,17 @@ One line secures the LLM calls made through the **patched SDK surfaces listed be
 
 ```python
 import promptguard
+
 promptguard.init(api_key="pg_live_xxx")
 
 # That's it. LLM calls through the patched surfaces below are now secured.
 # Works with ANY framework built on openai, anthropic, google-generativeai, cohere, or boto3.
 
 from openai import OpenAI
+
 client = OpenAI()
 response = client.chat.completions.create(
-    model="gpt-5-nano",
-    messages=[{"role": "user", "content": "Hello!"}]
+    model="gpt-5-nano", messages=[{"role": "user", "content": "Hello!"}]
 )
 # ^^ Scanned by PromptGuard before reaching OpenAI
 ```
@@ -61,7 +62,8 @@ response = client.chat.completions.create(
 
 - `openai`: `chat.completions.create()`, `chat.completions.parse()` (when the installed SDK exposes it), and `responses.create()` (when the installed SDK ships the Responses API). The Responses patch scans the `instructions` param plus string or message-item `input` forms; exotic input items (function-call outputs, reasoning items) are not scanned.
 - `anthropic`: `messages.create()` (including the separate `system` param). Text and `tool_result` content blocks are scanned (tool results are the canonical indirect-injection channel); other block types (images, `tool_use` inputs, thinking) are not.
-- `google-generativeai`: `GenerativeModel.generate_content()` / `generate_content_async()`.
+- `google-genai` (Google's current SDK): `models.generate_content()` and `generate_content_stream()`, sync and async. The `config.system_instruction` system prompt is scanned, and so are tool-call arguments, function responses and code-execution output — not just plain text parts. Because `contents` is keyword-only in this SDK, a `redact` decision rewrites the prompt rather than escalating to a block.
+- `google-generativeai` (**deprecated by Google** when Gemini 2.0 shipped; still supported because customers are still on it): `GenerativeModel.generate_content()` / `generate_content_async()`. `redact` escalates to a block here, because `contents` is positional and cannot be safely rewritten.
 - `cohere`: `Client.chat()` / `ClientV2.chat()` (v1 `preamble`/`message`/`chat_history` and v2 `messages`; the v1 `preamble` is scanned as a system message).
 - `boto3` (Bedrock Runtime): `invoke_model` and `converse` (via `_make_api_call`).
 
@@ -96,6 +98,7 @@ is `WARNING`, so enable the `promptguard` logger to see it:
 
 ```python
 import logging
+
 logging.getLogger("promptguard").setLevel(logging.INFO)
 ```
 
@@ -103,9 +106,10 @@ You can also assert instrumentation programmatically (e.g. in tests):
 
 ```python
 import promptguard
+
 promptguard.init(api_key="pg_live_xxx")
 
-assert promptguard.is_active()               # a guard client is installed
+assert promptguard.is_active()  # a guard client is installed
 assert "openai" in promptguard.patched_sdks()  # the OpenAI SDK was patched
 ```
 
@@ -119,6 +123,7 @@ If you prefer the proxy approach, just swap your client:
 ```python
 # Before
 from openai import OpenAI
+
 client = OpenAI()
 response = client.chat.completions.create(
     model="gpt-5-nano",
@@ -128,6 +133,7 @@ print(response.choices[0].message.content)  # attribute access
 
 # After
 from promptguard import PromptGuard
+
 client = PromptGuard(api_key="pg_live_xxx")
 response = client.chat.completions.create(
     model="gpt-5-nano",
@@ -163,6 +169,7 @@ handler = PromptGuardCallbackHandler(api_key="pg_live_xxx")
 
 # Attach to an LLM
 from langchain_openai import ChatOpenAI
+
 llm = ChatOpenAI(model="gpt-5-nano", callbacks=[handler])
 
 # Or use globally with any chain
@@ -220,13 +227,13 @@ You can also wrap individual tools:
 from promptguard.integrations.crewai import secure_tool
 from crewai.tools import BaseTool
 
+
 @secure_tool(api_key="pg_live_xxx")
 class SearchTool(BaseTool):
     name = "search"
     description = "Search the web"
 
-    def _run(self, query: str) -> str:
-        ...
+    def _run(self, query: str) -> str: ...
 ```
 
 ### LlamaIndex
@@ -326,9 +333,7 @@ if result["blocked"]:
 ## PII Redaction
 
 ```python
-result = pg.security.redact(
-    "My email is john@example.com and SSN is 123-45-6789"
-)
+result = pg.security.redact("My email is john@example.com and SSN is 123-45-6789")
 print(result["redacted"])
 # Output: "My email is [EMAIL] and SSN is [SSN]"
 ```
@@ -411,8 +416,7 @@ from promptguard import PromptGuardAsync
 
 async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
     response = await pg.chat.completions.create(
-        model="gpt-5-nano",
-        messages=[{"role": "user", "content": "Hello!"}]
+        model="gpt-5-nano", messages=[{"role": "user", "content": "Hello!"}]
     )
 
     # Async security scanning
@@ -433,8 +437,8 @@ from promptguard import PromptGuard
 
 pg = PromptGuard(
     api_key="pg_live_xxx",
-    max_retries=3,        # Number of retry attempts (default: 3)
-    retry_delay=0.5,      # Base delay in seconds between retries (default: 1.0)
+    max_retries=3,  # Number of retry attempts (default: 3)
+    retry_delay=0.5,  # Base delay in seconds between retries (default: 1.0)
 )
 ```
 
@@ -502,10 +506,12 @@ from promptguard import PromptGuardBlockedError
 
 # Auto-instrumentation
 import promptguard
+
 promptguard.init(api_key="pg_live_xxx")
 
 # Use your real LLM client as usual — it is patched in place.
 from openai import OpenAI
+
 client = OpenAI()
 
 try:

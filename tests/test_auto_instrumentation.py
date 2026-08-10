@@ -107,23 +107,45 @@ class TestInit:
             caplog.at_level(logging.WARNING, logger="promptguard"),
         ):
             init(api_key="pg_test")
+        # NOT `len(warnings) == 1` any more. init() also names each provider
+        # library that is installed but unhooked, and whether any are present
+        # depends on the environment the suite runs in -- so assert this warning
+        # is among them rather than that it is alone. See
+        # tests/test_unpatched_is_reported.py for the per-library half.
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1
-        msg = warnings[0].getMessage()
-        assert "no supported LLM SDK to patch" in msg
+        matching = [r for r in warnings if "no supported LLM SDK to patch" in r.getMessage()]
+        assert len(matching) == 1
+        msg = matching[0].getMessage()
         # The message must name the SDKs it looked for so onboarding users know
-        # what to install.
-        for sdk in ("openai", "anthropic", "google-generativeai", "cohere", "boto3"):
+        # what to install. `google-genai` is the current one; `google-generativeai`
+        # is the deprecated package we still support.
+        for sdk in (
+            "openai",
+            "anthropic",
+            "google-genai",
+            "google-generativeai",
+            "cohere",
+            "boto3",
+        ):
             assert sdk in msg
 
     def test_init_info_when_sdk_patched(self, caplog):
         # A non-empty patch set is the success path and must stay at INFO (not
         # WARNING) so healthy startups don't emit false alarms.
+        #
+        # `_detected_unpatched` is stubbed to empty deliberately: this test is
+        # about the SUCCESS path staying quiet, and leaving it live would make
+        # the result depend on which provider SDKs happen to be installed in the
+        # environment. The unhooked-library warning has its own test file, and
+        # the two must not be able to mask each other.
         import promptguard.auto as auto
 
-        fake_patch = type("FakePatch", (), {"NAME": "openai"})()
+        fake_patch = type(
+            "FakePatch", (), {"NAME": "openai", "revert": staticmethod(lambda: None)}
+        )()
         with (
             patch.object(auto, "_apply_patches", lambda: auto._applied_patches.append(fake_patch)),
+            patch.object(auto, "_detected_unpatched", list),
             caplog.at_level(logging.INFO, logger="promptguard"),
         ):
             init(api_key="pg_test")

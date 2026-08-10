@@ -79,9 +79,9 @@ The project uses `asyncio_mode = "strict"` (configured in `pyproject.toml`). All
 ```python
 import pytest
 
+
 @pytest.mark.asyncio
-async def test_async_scan():
-    ...
+async def test_async_scan(): ...
 ```
 
 ### Contract Tests
