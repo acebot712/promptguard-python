@@ -1,0 +1,6 @@
+{
+  "_comment": "Provenance for tests/guard-contract.json. Written by scripts/sync_guard_contract.py from .github/workflows/sync-from-api.yml. Do not hand-edit: tests/test_contract.py checks the contract against the digest recorded here, so editing either file alone fails the suite -- which is the drift this pair exists to catch.",
+  "source": "https://promptguard.co/contracts/guard-contract.json",
+  "version": "1.5.1",
+  "sha256": "ccb743c6ba5ff5715649bc6c156622f79ec82f7132cba5d3f1e034c825b72fba"
+}

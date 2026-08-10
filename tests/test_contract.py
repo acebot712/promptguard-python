@@ -4,14 +4,35 @@ Shared contract tests - validates the Python SDK against guard-contract.json.
 If this test fails, the Python SDK has drifted from the cross-SDK
 contract. Fix the SDK, not the contract (unless both SDKs agree on
 the change).
+
+That sentence used to be untrue in an important way. `guard-contract.json` is
+vendored from the platform monorepo's `packages/sdk-shared/guard-contract.json`
+and was hand-copied, so every assertion below compared this SDK against a local
+duplicate of itself. It could not detect the one thing its own docstring
+promised. It did not: on 2026-08-11 the monorepo source turned out to be two
+minor versions behind this copy (v1.3.0 against v1.5.1), missing the whole
+`redaction_enforcement` section, and five months stale.
+
+`TestContractProvenance` below is the part that can now fail. The monorepo
+publishes the contract at a public URL; `.github/workflows/sync-from-api.yml`
+fetches it weekly and `scripts/sync_guard_contract.py` records the digest it
+adopted in `guard-contract.lock.json`. Editing either file by hand breaks the
+pair, which is exactly the move that caused the drift.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 CONTRACT_PATH = Path(__file__).resolve().parent / "guard-contract.json"
+LOCK_PATH = Path(__file__).resolve().parent / "guard-contract.lock.json"
+
+# The canonical URL the contract is synced from. Asserted rather than merely
+# recorded: repointing the sync at some other origin should be a visible test
+# change, not a one-line edit to a workflow nobody reads.
+CANONICAL_SOURCE = "https://promptguard.co/contracts/guard-contract.json"
 
 
 @pytest.fixture(scope="module")
@@ -19,6 +40,67 @@ def contract():
     assert CONTRACT_PATH.exists(), f"Contract file not found: {CONTRACT_PATH}"
     with CONTRACT_PATH.open() as f:
         return json.load(f)
+
+
+@pytest.fixture(scope="module")
+def lock():
+    assert LOCK_PATH.exists(), (
+        f"Contract lockfile not found: {LOCK_PATH}. It is written by "
+        "scripts/sync_guard_contract.py; without it nothing records which "
+        "upstream contract this copy came from."
+    )
+    with LOCK_PATH.open() as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Provenance - the check that was missing
+# ---------------------------------------------------------------------------
+
+
+class TestContractProvenance:
+    """Everything below this class tests the SDK against the contract.
+
+    This class tests the *contract* - that the copy in this repo is still the
+    one that was synced from upstream, and not something someone adjusted
+    locally to make a failing assertion go away.
+    """
+
+    def test_contract_matches_the_digest_recorded_at_sync_time(self, lock):
+        actual = hashlib.sha256(CONTRACT_PATH.read_bytes()).hexdigest()
+        assert actual == lock["sha256"], (
+            "tests/guard-contract.json does not match the digest recorded in "
+            "tests/guard-contract.lock.json.\n"
+            f"  file:     {actual}\n"
+            f"  lockfile: {lock['sha256']}\n\n"
+            "This copy is vendored from the platform monorepo and is not yours to "
+            "edit. If the contract genuinely changed, change it in "
+            "packages/sdk-shared/guard-contract.json, let `make docs` publish it, "
+            "and take the PR that .github/workflows/sync-from-api.yml opens - "
+            "which updates both files together. If you are mid-sync locally, run "
+            "scripts/sync_guard_contract.py against the fetched file."
+        )
+
+    def test_version_matches_the_lockfile(self, contract, lock):
+        assert contract["_version"] == lock["version"], (
+            f"contract is v{contract['_version']} but the lockfile records "
+            f"v{lock['version']} - the two were not written by the same sync."
+        )
+
+    def test_lockfile_points_at_the_canonical_source(self, lock):
+        assert lock["source"] == CANONICAL_SOURCE, (
+            f"the contract was synced from {lock['source']!r}, not the canonical "
+            f"{CANONICAL_SOURCE!r}."
+        )
+
+    def test_a_changed_byte_would_be_caught(self, lock):
+        """A digest comparison that cannot fail is decoration.
+
+        The assertion above is only worth having if a single mutated byte
+        actually breaks it, so that is exercised rather than assumed.
+        """
+        mutated = CONTRACT_PATH.read_bytes().replace(b'"_version"', b'"_verzion"', 1)
+        assert hashlib.sha256(mutated).hexdigest() != lock["sha256"]
 
 
 # ---------------------------------------------------------------------------

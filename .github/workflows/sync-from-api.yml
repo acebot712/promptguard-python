@@ -52,6 +52,33 @@ jobs:
       - name: Generate types
         run: python scripts/generate_types_from_spec.py openapi-developer.json
 
+      # The cross-SDK contract is a second artifact from the same monorepo, and
+      # until 2026-08-11 it was the one nothing fetched. It was hand-copied into
+      # tests/, so the monorepo source drifted two minor versions BEHIND its own
+      # copies and sat there five months. `make docs` now publishes it to a
+      # public URL, which makes it fetchable exactly like the spec above.
+      #
+      # NOT docs.promptguard.co, where the spec lives: Mintlify serves only the
+      # JSON that docs.json registers as an OpenAPI source. Measured against the
+      # live site, /docs.json and /package.json are both 404 despite being in
+      # the tree and absent from .mintignore. apps/landing/public/ is a plain
+      # static mount and serves whatever it holds.
+      - name: Download latest cross-SDK contract
+        run: |
+          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
+            -o guard-contract.upstream.json \
+            "https://promptguard.co/contracts/guard-contract.json"
+
+      # Writes tests/guard-contract.json AND tests/guard-contract.lock.json.
+      # Nothing is pushed here -- the test run below decides whether this
+      # becomes a reviewable PR or a red build.
+      - name: Adopt the contract
+        run: python scripts/sync_guard_contract.py guard-contract.upstream.json
+
+      # Runs AFTER both artifacts are updated, so a green run means the SDK
+      # satisfies the new types and the new contract. If the contract moved in a
+      # way this SDK does not implement yet, the job fails here and no PR opens
+      # -- which is the correct outcome: that needs a person, not a merge button.
       - name: Validate SDK still passes
         run: |
           ruff check .
@@ -60,7 +87,22 @@ jobs:
       - name: Check for changes
         id: diff
         run: |
+          # Reported separately so the PR body says which artifact moved. A
+          # contract change and a types change have different reviewers and
+          # different blast radii.
           if git diff --quiet promptguard/generated/; then
+            echo "types_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "types_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if git diff --quiet tests/guard-contract.json tests/guard-contract.lock.json; then
+            echo "contract_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "contract_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if git diff --quiet promptguard/generated/ tests/guard-contract.json tests/guard-contract.lock.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -81,22 +123,32 @@ jobs:
           # sync branch already exists from a prior failed run.
           BRANCH="auto/sync-api-types-${{ github.run_id }}"
           git checkout -b "$BRANCH"
-          git add promptguard/generated/
-          git commit -m "chore: sync generated types from API spec"
+          git add promptguard/generated/ tests/guard-contract.json tests/guard-contract.lock.json
+          git commit -m "chore: sync generated types and cross-SDK contract from upstream"
           git push -u origin "$BRANCH"
 
           gh pr create \
             --title "chore: sync generated API types" \
             --body "$(cat <<'EOF'
-          ## Auto-generated from OpenAPI spec
+          ## Auto-synced from the platform monorepo
 
-          Updated `promptguard/generated/api_types.py` from the latest API spec.
+          | Artifact | Source | Changed |
+          |---|---|---|
+          | `promptguard/generated/api_types.py` | `openapi-developer.json` | ${{ steps.diff.outputs.types_changed }} |
+          | `tests/guard-contract.json` | `guard-contract.json` | ${{ steps.diff.outputs.contract_changed }} |
 
-          **What changed**: Type definitions only (TypedDicts). No client code,
-          patches, or integrations were modified.
+          **Types**: definitions only (TypedDicts). No client code, patches, or
+          integrations were modified. If new types were added, consider importing
+          them in hand-written code where useful.
 
-          **What to check**: If new types were added, consider importing them in
-          hand-written code where useful. All existing tests pass.
+          **Contract**: the cross-SDK contract is vendored, not owned here -- the
+          Node SDK must satisfy the same file. A change means upstream changed
+          the agreed behaviour, so read it rather than rubber-stamping it, and
+          check whether promptguard-node has the matching PR.
+          `tests/guard-contract.lock.json` records the digest and moves with it.
+
+          `ruff check` and the full `pytest` suite passed **against these updated
+          artifacts** -- this PR does not exist unless they did.
 
           Triggered by: ${{ github.event_name }} at ${{ github.run_id }}
           EOF
