@@ -17,6 +17,11 @@ logger = logging.getLogger("promptguard")
 
 NAME = "boto3-bedrock"
 
+# Import names that mean "this patch is relevant". `auto.py` compares these
+# against what actually got hooked, so an installed-but-unhooked library is
+# reported by name instead of passing as "customer does not use this provider".
+DETECTS = ("botocore",)
+
 _original_api_call = None
 _patched = False
 

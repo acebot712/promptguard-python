@@ -1,6 +1,12 @@
 """
-Google Generative AI SDK patch - wraps
+Google Generative AI SDK patch (LEGACY) - wraps
 ``google.generativeai.GenerativeModel.generate_content`` (sync + async).
+
+**Google deprecated this SDK** when Gemini 2.0 shipped; its PyPI description
+opens with "[Deprecated]". The current one is google-genai, handled by
+google_genai_patch.py. This module stays because customers are still on the
+old package, and dropping it to chase the new one would leave them silently
+unprotected -- the exact bug adding the new patch fixes in the other direction.
 
 Covers direct Google AI usage and frameworks built on top (LangChain's
 ChatGoogleGenerativeAI, LlamaIndex's Gemini integration, etc.).
@@ -15,6 +21,11 @@ from promptguard.patches._base import wrap_async, wrap_sync
 logger = logging.getLogger("promptguard")
 
 NAME = "google-generativeai"
+
+# Import names that mean "this patch is relevant". `auto.py` compares these
+# against what actually got hooked, so an installed-but-unhooked library is
+# reported by name instead of passing as "customer does not use this provider".
+DETECTS = ("google.generativeai",)
 
 _original_sync_generate = None
 _original_async_generate = None

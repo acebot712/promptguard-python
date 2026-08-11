@@ -15,6 +15,11 @@ logger = logging.getLogger("promptguard")
 
 NAME = "cohere"
 
+# Import names that mean "this patch is relevant". `auto.py` compares these
+# against what actually got hooked, so an installed-but-unhooked library is
+# reported by name instead of passing as "customer does not use this provider".
+DETECTS = ("cohere",)
+
 _originals: dict[str, Any] = {}
 _patched = False
 
