@@ -55,7 +55,12 @@ def _sanitize_docstring(text: object) -> str:
     """Collapse a spec string for use inside a ``\"\"\"..\"\"\"`` docstring."""
     collapsed = " ".join(str(text).split())
     # Prevent closing the docstring early or starting an escape at its end.
-    return collapsed.replace("\\", "\\\\").replace('"""', "'''")
+    escaped = collapsed.replace("\\", "\\\\").replace('"""', "'''")
+    # A description ending in a quote would butt up against the closing
+    # delimiter (``\"\"\"he said "hi"\"\"\"`` is a syntax error), so escape it.
+    if escaped.endswith('"'):
+        escaped = escaped[:-1] + '\\"'
+    return escaped
 
 
 def resolve_ref(ref: str) -> str:
@@ -96,33 +101,47 @@ def map_type(prop: dict) -> str:
     return "Any"
 
 
-def generate_typed_dict(name: str, schema: dict) -> str:
-    lines: list[str] = []
+def _alias_block(name: str, target: str, description: object | None) -> str:
+    """Render ``name = target``, with the schema description as a comment.
 
-    if schema.get("description"):
-        lines.append(f'"""{_sanitize_docstring(schema["description"])}"""')
-        lines.append("")
+    An alias has no body, so there is nowhere to hang a docstring: a string
+    literal after an assignment is a no-op statement, which is exactly the
+    construct this generator used to emit. A ``#`` comment documents the alias
+    without adding a statement.
+    """
+    statement = f"{name} = {target}"
+    if description:
+        return f"# {_sanitize_inline(description)}\n{statement}"
+    return statement
+
+
+def generate_typed_dict(name: str, schema: dict) -> str:
+    """Render one schema as a single top-level block.
+
+    The block carries no leading or trailing blank lines — ``render_module``
+    owns the separation between blocks.
+    """
+    description = schema.get("description")
 
     if "enum" in schema:
         values = ", ".join(_py_str_literal(v) for v in schema["enum"])
-        lines.append(f"{name} = Literal[{values}]")
-        lines.append("")
-        return "\n".join(lines)
+        return _alias_block(name, f"Literal[{values}]", description)
 
     props = schema.get("properties")
     if not props:
-        lines.append(f"{name} = dict[str, Any]")
-        lines.append("")
-        return "\n".join(lines)
+        return _alias_block(name, "dict[str, Any]", description)
 
     required = set(schema.get("required", []))
+    total = "" if required == set(props.keys()) else ", total=False"
 
-    if required == set(props.keys()):
-        lines.append(f"class {name}(TypedDict):")
-    elif not required:
-        lines.append(f"class {name}(TypedDict, total=False):")
-    else:
-        lines.append(f"class {name}(TypedDict, total=False):")
+    lines = [f"class {name}(TypedDict{total}):"]
+    if description:
+        # The class docstring — the first statement *inside* the body. Emitted
+        # above the class it would be a bare module-level string that documents
+        # nothing and leaves the file unformattable.
+        lines.append(f'    """{_sanitize_docstring(description)}"""')
+        # ruff format wants a blank line between a class docstring and the body.
+        lines.append("")
 
     emitted = False
     for prop_name, prop_def in props.items():
@@ -139,9 +158,8 @@ def generate_typed_dict(name: str, schema: dict) -> str:
 
     # A TypedDict body can't be empty; fall back to a plain alias.
     if not emitted:
-        return f"{name} = dict[str, Any]\n"
+        return _alias_block(name, "dict[str, Any]", description)
 
-    lines.append("")
     return "\n".join(lines)
 
 
@@ -214,7 +232,6 @@ def render_module(spec: dict) -> str:
         from __future__ import annotations
 
         from typing import Any, Literal, TypedDict
-
     """)
 
     valid_schemas = []
@@ -224,9 +241,13 @@ def render_module(spec: dict) -> str:
             continue
         valid_schemas.append((name, schema))
 
-    body = "\n\n".join(generate_typed_dict(name, schema) for name, schema in valid_schemas)
+    blocks = [generate_typed_dict(name, schema) for name, schema in valid_schemas]
 
-    output = header + body + "\n"
+    # Two blank lines between top-level definitions, as PEP 8 and ruff format
+    # want. ``header`` ends at its last import, so the same separator applies
+    # between the imports and the first block.
+    body = "\n\n\n".join(blocks)
+    output = (header + "\n\n" + body + "\n") if blocks else header
 
     # Abort before writing if anything executable slipped through.
     _assert_types_only(output)
