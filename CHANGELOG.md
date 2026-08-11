@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-08-11
+
 ### Fixed
 
 - **Gemini calls made through Google's current SDK were not being scanned.**
