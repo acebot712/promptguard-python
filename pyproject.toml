@@ -124,6 +124,9 @@ ignore = []
 # delivering. Every scheduled run from 2026-04-27 to 2026-08-10 failed this way,
 # 16 in a row, while the committed types fell 327 lines behind the live spec.
 "promptguard/generated/*.py" = ["E501"]
+# Developer scripts are command-line tools; printing IS their output, and a
+# logger here would send it somewhere nobody is reading.
+"scripts/**/*.py" = ["T201"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
