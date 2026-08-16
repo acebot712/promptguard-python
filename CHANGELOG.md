@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-08-16
+
 ### Added
 
 - **`promptguard.verify()` — a positive check that protection is actually

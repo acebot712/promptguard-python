@@ -131,7 +131,8 @@ ruff check . && ruff format --check . && pytest tests/ -v --cov --cov-fail-under
 
 Releases are triggered by creating a GitHub Release:
 
-1. Update `version` in `pyproject.toml`
+1. Update `__version__` in `promptguard/_version.py` — `pyproject.toml` reads it
+   from there (`[tool.hatch.version]`) and has no version of its own to edit
 2. Commit and push to `main`
 3. Create a GitHub Release
 
