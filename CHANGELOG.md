@@ -12,6 +12,21 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Added
+
+- **`promptguard.verify()` — a positive check that protection is actually
+  live.** `init()` returning cleanly has never meant anything is being scanned:
+  the SDK fails open, so a rejected API key, an unreachable Guard API or a
+  provider SDK we never hooked all leave an application that runs perfectly and
+  blocks nothing. Each of those already logged a warning, but a warning in a log
+  nobody tails is indistinguishable from silence. `verify()` makes the real
+  calls — reachability, authentication, a live injection probe, a PII probe —
+  and returns what came back, so a deployment can assert it instead of assuming
+  it: `assert promptguard.verify()["ok"]`. The checks and their names mirror
+  `promptguard verify` in the CLI so the two agree on what "working" means. It
+  never raises for a failed check, so a CI step sees every problem at once
+  rather than only the first.
+
 ## [1.12.0] — 2026-08-11
 
 ### Fixed

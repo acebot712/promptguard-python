@@ -25,6 +25,7 @@ Usage (auto-instrumentation - new):
     client.chat.completions.create(...)  # scanned by PromptGuard
 """
 
+from promptguard._verify import verify
 from promptguard._version import __version__
 from promptguard.auto import (
     init,
@@ -58,4 +59,5 @@ __all__ = [
     "is_active",
     "patched_sdks",
     "shutdown",
+    "verify",
 ]

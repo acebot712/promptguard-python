@@ -116,6 +116,57 @@ assert "openai" in promptguard.patched_sdks()  # the OpenAI SDK was patched
 `patched_sdks()` returns only the SDKs importable in the current environment
 (missing packages are silently skipped), and an empty list after `shutdown()`.
 
+### Confirming protection is actually live
+
+`init()` returning without an exception does not mean anything is being scanned.
+PromptGuard **fails open**, so a rejected API key, an unreachable Guard API, or a
+provider SDK we never hooked all leave you with an application that runs
+perfectly and blocks nothing. Each of those logs a warning — which helps only if
+someone is reading the log.
+
+`verify()` is the positive check. It makes the real calls and reports what came
+back:
+
+```python
+import promptguard
+
+report = promptguard.verify()
+
+if not report["ok"]:
+    for check in report["checks"]:
+        print(check["status"], check["name"], "-", check["detail"])
+    raise SystemExit(1)
+```
+
+In CI, the one-liner is usually enough:
+
+```python
+assert promptguard.verify()["ok"]
+```
+
+It checks reachability, authentication, live threat detection and PII redaction,
+plus which provider SDKs this process actually patched — the same checks, under
+the same names, as `promptguard verify` in the CLI.
+
+Each check reports `pass`, `warn` or `fail`. **Only a `fail` clears `ok`.** A
+request that never completed is a failure; a request that completed and came
+back permissive — an injection that was not blocked, a PII probe with nothing
+detected — is a warning, because a monitor-mode project legitimately behaves that
+way. Warnings are still the first thing to read before trusting a setup.
+
+`verify()` never raises for a failed check, so one call reports every problem
+rather than only the first. It raises `ValueError` only when no API key was
+supplied at all.
+
+> **Each call makes two real, billed requests.** The probes go through the same
+> endpoints as your production traffic, so every `verify()` writes two rows to
+> your security events — the injection probe among them, which shows up in your
+> dashboard and analytics as a genuine prompt-injection attempt and will trigger
+> any alert you have configured on injection. Both requests count against your
+> plan's quota. That is fine on deploy or at the start of a demo; calling it on
+> every CI build of a busy repo is how you end up with a threat dashboard full of
+> your own probes.
+
 ### Option 2: Proxy Mode (Drop-in Replacement)
 
 If you prefer the proxy approach, just swap your client:
