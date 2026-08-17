@@ -243,7 +243,7 @@ class ErrorEnvelope(TypedDict):
 
 
 class GuardContext(TypedDict, total=False):
-    """Optional rich context from framework integrations."""
+    """Optional rich context from framework integrations. Only ``tool_calls`` is scanned. The rest is descriptive — it labels the event for the dashboard and the audit log, and does not reach a detector."""
 
     # Framework name, e.g. 'langchain', 'crewai'
     framework: str | Any
@@ -253,9 +253,9 @@ class GuardContext(TypedDict, total=False):
     agent_id: str | Any
     # Session identifier for multi-turn tracking
     session_id: str | Any
-    # Tool calls in this turn
+    # Tool calls in this turn. The tool NAME and its ARGUMENTS are assembled into the scanned text and get the same detection stack as the messages — tool arguments are where an exfiltration payload actually travels, so they are scanned rather than logged. Both provider spellings are read: OpenAI's `{'type':'function','function':{'name','arguments'}}` and Anthropic's `{'type':'tool_use','name','input'}`, plus LangChain's `{'name','args'}`. A call in none of those shapes is reported in the response's `unscanned` array with its position; it is never quietly skipped.
     tool_calls: list[dict[str, Any]] | Any
-    # Arbitrary framework-specific metadata
+    # Arbitrary framework-specific metadata (not scanned)
     metadata: dict[str, Any] | Any
 
 
@@ -304,7 +304,7 @@ class GuardResponse(TypedDict, total=False):
     threats: list[ThreatDetail]
     # Processing time in milliseconds
     latency_ms: float
-    # Attachments that reached us and produced nothing to scan. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block.
+    # Parts that reached us and produced nothing to scan. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block, unsupported_tool_call (an entry in `context.tool_calls` in none of the shapes we can read — `index` is its position in that list).
     unscanned: list[UnscannedAttachment]
 
 
@@ -404,7 +404,7 @@ class QuotaErrorEnvelope(TypedDict):
 class RedactRequest(TypedDict, total=False):
     # Text to redact
     content: str
-    # Specific PII types to redact (default: all)
+    # Entity types to redact. Omit to use the policy's configured entities. Accepts detector entity names ('email', 'ssn', 'credit_card', 'phone_us'), the family aliases 'phone', 'ip_address' and 'passport', and 'api_key'. An unrecognized name is rejected rather than ignored.
     pii_types: list[str] | Any
 
 
@@ -459,9 +459,9 @@ class ThreatDetail(TypedDict, total=False):
 
 
 class UnscannedAttachment(TypedDict):
-    """One attachment we could not read, and why."""
+    """One part of the request we could not read, and why."""
 
-    # Position in the combined attachment list; -1 if N/A
+    # Position within the list the reason names — the combined attachment list, or `context.tool_calls` for `unsupported_tool_call`. -1 when the part has no position, which is every `unsupported_block`.
     index: int
     # Stable machine-readable code
     reason: str
@@ -514,7 +514,7 @@ class developer__projects__schemas__CreateProjectRequest(TypedDict, total=False)
     # Behaviour when the detection engine errors: 'open' forwards the request, 'closed' rejects it with 503.
     fail_mode: Literal["open", "closed"]
     use_case: str
-    strictness_level: str
+    strictness_level: Literal["strict", "moderate", "permissive"]
 
 
 class developer__projects__schemas__ProjectResponse(TypedDict, total=False):
