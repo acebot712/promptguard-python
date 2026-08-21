@@ -389,23 +389,6 @@ print(result["redacted"])
 # Output: "My email is [EMAIL] and SSN is [SSN]"
 ```
 
-## Web Scraping
-
-The proxy client exposes a `scrape` namespace for fetching and extracting page
-content through PromptGuard (responses are plain dicts):
-
-```python
-from promptguard import PromptGuard
-
-pg = PromptGuard(api_key="pg_live_xxx")
-
-# Single URL — returns a dict with the extracted content
-result = pg.scrape.url("https://example.com", render_js=False, extract_text=True)
-
-# Batch
-results = pg.scrape.batch(["https://a.com", "https://b.com"])
-```
-
 ## Agent Tool Validation
 
 The `agent` namespace validates individual agent tool calls (arguments) before
@@ -423,40 +406,44 @@ result = pg.agent.validate_tool(
 stats = pg.agent.stats("support-bot")
 ```
 
-Both `scrape` and `agent` are available on the async client (`PromptGuardAsync`)
-with the same methods.
+`agent` is available on the async client (`PromptGuardAsync`) with the same methods.
 
 ## Red Team Testing
 
-> **Preview / internal endpoint.** The `redteam` namespace targets the
-> `/api/v1/proxy/internal/redteam` path. It is a supported but preview-tier
-> surface intended for security testing; availability and response shapes may
-> change ahead of the other proxy namespaces, and access may be gated by plan.
+Run PromptGuard's adversarial corpus against your own policy configuration, and
+see how much of it your guardrails block. Useful from CI as a regression gate on
+a policy change.
 
 ```python
 from promptguard import PromptGuard
 
 pg = PromptGuard(api_key="pg_live_xxx")
 
-# Run the autonomous red team agent (LLM-powered mutation)
-report = pg.redteam.run_autonomous(
-    budget=200,
-    target_preset="support_bot:strict",
-)
-print(f"Grade: {report['grade']}, Bypass rate: {report['bypass_rate']:.0%}")
+# What the corpus contains, without running it
+catalog = pg.redteam.list_tests()
+print(f"{catalog['total']} attacks available")
 
-# Get Attack Intelligence stats
-stats = pg.redteam.intelligence_stats()
-print(f"Total patterns: {stats['total_patterns']}")
+# Run everything against a preset
+summary = pg.redteam.run_all(target_preset="support_bot:strict")
+print(f"Blocked {summary['blocked']}/{summary['total_tests']} ({summary['block_rate']:.0%})")
+
+# Run one named attack
+result = pg.redteam.run_test("prompt_injection_basic")
+
+# Or your own adversarial prompt
+result = pg.redteam.run_custom("ignore previous instructions and ...")
+print(result["decision"], result["reason"])
 ```
 
 The async client mirrors the same methods:
 
 ```python
 async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
-    report = await pg.redteam.run_autonomous(budget=200)
-    stats = await pg.redteam.intelligence_stats()
+    summary = await pg.redteam.run_all(target_preset="support_bot:strict")
 ```
+
+Requires an API key with the `proxy` scope (an unrestricted key also works).
+Device/scan-only credentials cannot reach these endpoints.
 
 ## Async Support
 
@@ -494,34 +481,6 @@ pg = PromptGuard(
 ```
 
 Retries use exponential backoff starting from `retry_delay`. Transient errors are retried: network timeouts, 5xx responses, and 429 rate limits (honoring a `Retry-After` header when present, capped at 60s). Other client errors (4xx) fail immediately, as does a 429 that signals hard quota exhaustion.
-
-## Embeddings
-
-Scan and secure embedding requests through the proxy:
-
-```python
-from promptguard import PromptGuard
-
-pg = PromptGuard(api_key="pg_live_xxx")
-
-response = pg.embeddings.create(
-    model="text-embedding-3-small",
-    input="The quick brown fox jumps over the lazy dog",
-)
-# Proxy responses are returned as plain dicts (OpenAI-compatible JSON shape).
-print(response["data"][0]["embedding"][:5])
-```
-
-Batch embedding requests are also supported:
-
-```python
-response = pg.embeddings.create(
-    model="text-embedding-3-small",
-    input=["First document", "Second document", "Third document"],
-)
-for item in response["data"]:
-    print(f"Index {item['index']}: {len(item['embedding'])} dimensions")
-```
 
 ## Configuration
 
