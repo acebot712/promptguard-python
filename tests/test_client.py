@@ -59,10 +59,7 @@ class TestSyncClientNamespaces:
         c = _make_sync_client()
         assert hasattr(c, "chat")
         assert hasattr(c.chat, "completions")
-        assert hasattr(c, "completions")
-        assert hasattr(c, "embeddings")
         assert hasattr(c, "security")
-        assert hasattr(c, "scrape")
         assert hasattr(c, "agent")
         assert hasattr(c, "redteam")
 
@@ -70,23 +67,10 @@ class TestSyncClientNamespaces:
         c = _make_sync_client()
         assert callable(c.chat.completions.create)
 
-    def test_embeddings_create(self):
-        c = _make_sync_client()
-        assert callable(c.embeddings.create)
-
-    def test_completions_create(self):
-        c = _make_sync_client()
-        assert callable(c.completions.create)
-
     def test_security_scan_and_redact(self):
         c = _make_sync_client()
         assert callable(c.security.scan)
         assert callable(c.security.redact)
-
-    def test_scrape_url_and_batch(self):
-        c = _make_sync_client()
-        assert callable(c.scrape.url)
-        assert callable(c.scrape.batch)
 
     def test_agent_validate_tool_and_stats(self):
         c = _make_sync_client()
@@ -109,24 +93,13 @@ class TestAsyncClientNamespaces:
         c = _make_async_client()
         assert hasattr(c, "chat")
         assert hasattr(c.chat, "completions")
-        assert hasattr(c, "completions")
-        assert hasattr(c, "embeddings")
         assert hasattr(c, "security")
-        assert hasattr(c, "scrape")
         assert hasattr(c, "agent")
         assert hasattr(c, "redteam")
 
     def test_chat_completions_create_is_coroutine(self):
         c = _make_async_client()
         assert inspect.iscoroutinefunction(c.chat.completions.create)
-
-    def test_completions_create_is_coroutine(self):
-        c = _make_async_client()
-        assert inspect.iscoroutinefunction(c.completions.create)
-
-    def test_embeddings_create_is_coroutine(self):
-        c = _make_async_client()
-        assert inspect.iscoroutinefunction(c.embeddings.create)
 
     def test_security_scan_is_coroutine(self):
         c = _make_async_client()
@@ -135,10 +108,6 @@ class TestAsyncClientNamespaces:
     def test_security_redact_is_coroutine(self):
         c = _make_async_client()
         assert inspect.iscoroutinefunction(c.security.redact)
-
-    def test_scrape_url_is_coroutine(self):
-        c = _make_async_client()
-        assert inspect.iscoroutinefunction(c.scrape.url)
 
     def test_agent_validate_tool_is_coroutine(self):
         c = _make_async_client()
@@ -470,3 +439,26 @@ class TestQuotaErrorParsing:
         assert exc.value.current_plan == "free"
         assert exc.value.requests_used == 10000
         assert exc.value.requests_limit == 10000
+
+
+class TestRemovedNamespacesStayRemoved:
+    """scrape, embeddings and completions called routes that do not exist.
+
+    /api/v1/scrape and /api/v1/completions were deleted from the backend on
+    2026-02-18 and nobody updated the SDK; /api/v1/embeddings was never built at
+    all -- it appears only in an old scope-mapping list. All three 404'd for
+    every caller. They are gone, and this fails if one comes back without the
+    endpoint behind it.
+    """
+
+    @pytest.mark.parametrize("namespace", ["scrape", "embeddings", "completions"])
+    def test_sync_client_does_not_offer_it(self, namespace):
+        assert not hasattr(_make_sync_client(), namespace)
+
+    @pytest.mark.parametrize("namespace", ["scrape", "embeddings", "completions"])
+    def test_async_client_does_not_offer_it(self, namespace):
+        assert not hasattr(_make_async_client(), namespace)
+
+    def test_chat_completions_is_untouched(self):
+        """`chat.completions` is a different thing and is very much alive."""
+        assert hasattr(_make_sync_client().chat, "completions")

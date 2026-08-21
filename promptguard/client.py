@@ -281,48 +281,6 @@ class Chat:
         self.completions = ChatCompletions(client)
 
 
-class Completions:
-    """Legacy completions API (deprecated by OpenAI)."""
-
-    def __init__(self, client: "PromptGuard"):
-        self._client = client
-
-    def create(
-        self,
-        model: str,
-        prompt: str,
-        max_tokens: int | None = None,
-        temperature: float = 1.0,
-        **kwargs,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "temperature": temperature,
-            **kwargs,
-        }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        return self._client._request("POST", "/completions", json=payload)
-
-
-class Embeddings:
-    def __init__(self, client: "PromptGuard"):
-        self._client = client
-
-    def create(
-        self,
-        model: str,
-        input: str | list[str],
-        **kwargs,
-    ) -> dict[str, Any]:
-        return self._client._request(
-            "POST",
-            "/embeddings",
-            json={"model": model, "input": input, **kwargs},
-        )
-
-
 class Security:
     def __init__(self, client: "PromptGuard"):
         self._client = client
@@ -339,36 +297,6 @@ class Security:
             "POST",
             "/security/redact",
             json={"content": content, "pii_types": pii_types},
-        )
-
-
-class Scrape:
-    def __init__(self, client: "PromptGuard"):
-        self._client = client
-
-    def url(
-        self,
-        url: str,
-        render_js: bool = False,
-        extract_text: bool = True,
-        timeout: int = 30,
-    ) -> dict[str, Any]:
-        return self._client._request(
-            "POST",
-            "/scrape",
-            json={
-                "url": url,
-                "render_js": render_js,
-                "extract_text": extract_text,
-                "timeout": timeout,
-            },
-        )
-
-    def batch(self, urls: list[str], **kwargs) -> dict[str, Any]:
-        return self._client._request(
-            "POST",
-            "/scrape/batch",
-            json={"urls": urls, **kwargs},
         )
 
 
@@ -484,10 +412,7 @@ class PromptGuard:
         # An explicit timeout= wins; otherwise honor the Config value.
         self._http = httpx.Client(timeout=timeout if timeout is not None else self.config.timeout)
         self.chat = Chat(self)
-        self.completions = Completions(self)
-        self.embeddings = Embeddings(self)
         self.security = Security(self)
-        self.scrape = Scrape(self)
         self.agent = Agent(self)
         self.redteam = RedTeam(self)
 
@@ -611,46 +536,6 @@ class AsyncChat:
         self.completions = AsyncChatCompletions(client)
 
 
-class AsyncCompletions:
-    def __init__(self, client: "PromptGuardAsync"):
-        self._client = client
-
-    async def create(
-        self,
-        model: str,
-        prompt: str,
-        max_tokens: int | None = None,
-        temperature: float = 1.0,
-        **kwargs,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "temperature": temperature,
-            **kwargs,
-        }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        return await self._client._request("POST", "/completions", json=payload)
-
-
-class AsyncEmbeddings:
-    def __init__(self, client: "PromptGuardAsync"):
-        self._client = client
-
-    async def create(
-        self,
-        model: str,
-        input: str | list[str],
-        **kwargs,
-    ) -> dict[str, Any]:
-        return await self._client._request(
-            "POST",
-            "/embeddings",
-            json={"model": model, "input": input, **kwargs},
-        )
-
-
 class AsyncSecurity:
     def __init__(self, client: "PromptGuardAsync"):
         self._client = client
@@ -667,36 +552,6 @@ class AsyncSecurity:
             "POST",
             "/security/redact",
             json={"content": content, "pii_types": pii_types},
-        )
-
-
-class AsyncScrape:
-    def __init__(self, client: "PromptGuardAsync"):
-        self._client = client
-
-    async def url(
-        self,
-        url: str,
-        render_js: bool = False,
-        extract_text: bool = True,
-        timeout: int = 30,
-    ) -> dict[str, Any]:
-        return await self._client._request(
-            "POST",
-            "/scrape",
-            json={
-                "url": url,
-                "render_js": render_js,
-                "extract_text": extract_text,
-                "timeout": timeout,
-            },
-        )
-
-    async def batch(self, urls: list[str], **kwargs) -> dict[str, Any]:
-        return await self._client._request(
-            "POST",
-            "/scrape/batch",
-            json={"urls": urls, **kwargs},
         )
 
 
@@ -797,10 +652,7 @@ class PromptGuardAsync:
             timeout=timeout if timeout is not None else self.config.timeout
         )
         self.chat = AsyncChat(self)
-        self.completions = AsyncCompletions(self)
-        self.embeddings = AsyncEmbeddings(self)
         self.security = AsyncSecurity(self)
-        self.scrape = AsyncScrape(self)
         self.agent = AsyncAgent(self)
         self.redteam = AsyncRedTeam(self)
 
