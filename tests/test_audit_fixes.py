@@ -142,7 +142,7 @@ class TestPathParamEncoding:
         from promptguard.client import RedTeam
 
         RedTeam(_Rec()).run_test("a/b c")
-        assert captured["path"] == "/internal/redteam/test/a%2Fb%20c"
+        assert captured["path"] == "/security-testing/run/a%2Fb%20c"
 
 
 # ── Bedrock redaction ─────────────────────────────────────────────────────

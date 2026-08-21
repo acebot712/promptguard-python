@@ -399,7 +399,24 @@ class Agent:
 
 
 class RedTeam:
-    _BASE = "/internal/redteam"
+    """Run the adversarial corpus against your own policy configuration.
+
+    Every method here used to target ``/internal/redteam``, which requires
+    platform-admin auth -- so all of them returned 401 for every customer who
+    called them. The customer-facing plane is ``/api/v1/security-testing``,
+    reachable with an ordinary API key (``proxy`` scope).
+
+    Two methods were removed rather than repointed, because neither has a
+    customer-facing equivalent:
+
+    * ``run_autonomous`` -- the LLM-powered mutation loop. It takes a
+      caller-supplied budget and costs real money per run, so it stays
+      back-office rather than being exposed to any API key.
+    * ``intelligence_stats`` -- called ``/internal/redteam/intelligence/stats``,
+      which exists on no plane at all. It was a 404 for admins too.
+    """
+
+    _BASE = "/security-testing"
 
     def __init__(self, client: "PromptGuard"):
         self._client = client
@@ -410,37 +427,23 @@ class RedTeam:
     def run_test(self, test_name: str, target_preset: str = "default") -> dict[str, Any]:
         return self._client._request(
             "POST",
-            f"{self._BASE}/test/{quote(test_name, safe='')}",
+            f"{self._BASE}/run/{quote(test_name, safe='')}",
             json={"target_preset": target_preset},
         )
 
     def run_all(self, target_preset: str = "default") -> dict[str, Any]:
         return self._client._request(
             "POST",
-            f"{self._BASE}/test-all",
+            f"{self._BASE}/run-all",
             json={"target_preset": target_preset},
         )
 
     def run_custom(self, prompt: str, target_preset: str = "default") -> dict[str, Any]:
         return self._client._request(
             "POST",
-            f"{self._BASE}/test-custom",
+            f"{self._BASE}/run-custom",
             json={"custom_prompt": prompt, "target_preset": target_preset},
         )
-
-    def run_autonomous(
-        self,
-        budget: int = 100,
-        target_preset: str = "default",
-        enabled_detectors: list[str] | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"budget": budget, "target_preset": target_preset}
-        if enabled_detectors is not None:
-            payload["enabled_detectors"] = enabled_detectors
-        return self._client._request("POST", f"{self._BASE}/autonomous", json=payload)
-
-    def intelligence_stats(self) -> dict[str, Any]:
-        return self._client._request("GET", f"{self._BASE}/intelligence/stats")
 
 
 # ── Sync Client ────────────────────────────────────────────────────────────
@@ -724,7 +727,10 @@ class AsyncAgent:
 
 
 class AsyncRedTeam:
-    _BASE = "/internal/redteam"
+    """Async counterpart of :class:`RedTeam`; see it for why the paths moved
+    and why ``run_autonomous`` / ``intelligence_stats`` are gone."""
+
+    _BASE = "/security-testing"
 
     def __init__(self, client: "PromptGuardAsync"):
         self._client = client
@@ -735,37 +741,23 @@ class AsyncRedTeam:
     async def run_test(self, test_name: str, target_preset: str = "default") -> dict[str, Any]:
         return await self._client._request(
             "POST",
-            f"{self._BASE}/test/{quote(test_name, safe='')}",
+            f"{self._BASE}/run/{quote(test_name, safe='')}",
             json={"target_preset": target_preset},
         )
 
     async def run_all(self, target_preset: str = "default") -> dict[str, Any]:
         return await self._client._request(
             "POST",
-            f"{self._BASE}/test-all",
+            f"{self._BASE}/run-all",
             json={"target_preset": target_preset},
         )
 
     async def run_custom(self, prompt: str, target_preset: str = "default") -> dict[str, Any]:
         return await self._client._request(
             "POST",
-            f"{self._BASE}/test-custom",
+            f"{self._BASE}/run-custom",
             json={"custom_prompt": prompt, "target_preset": target_preset},
         )
-
-    async def run_autonomous(
-        self,
-        budget: int = 100,
-        target_preset: str = "default",
-        enabled_detectors: list[str] | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"budget": budget, "target_preset": target_preset}
-        if enabled_detectors is not None:
-            payload["enabled_detectors"] = enabled_detectors
-        return await self._client._request("POST", f"{self._BASE}/autonomous", json=payload)
-
-    async def intelligence_stats(self) -> dict[str, Any]:
-        return await self._client._request("GET", f"{self._BASE}/intelligence/stats")
 
 
 # ── Async Client ───────────────────────────────────────────────────────────

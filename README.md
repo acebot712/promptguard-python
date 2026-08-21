@@ -428,35 +428,41 @@ with the same methods.
 
 ## Red Team Testing
 
-> **Preview / internal endpoint.** The `redteam` namespace targets the
-> `/api/v1/proxy/internal/redteam` path. It is a supported but preview-tier
-> surface intended for security testing; availability and response shapes may
-> change ahead of the other proxy namespaces, and access may be gated by plan.
+Run PromptGuard's adversarial corpus against your own policy configuration, and
+see how much of it your guardrails block. Useful from CI as a regression gate on
+a policy change.
 
 ```python
 from promptguard import PromptGuard
 
 pg = PromptGuard(api_key="pg_live_xxx")
 
-# Run the autonomous red team agent (LLM-powered mutation)
-report = pg.redteam.run_autonomous(
-    budget=200,
-    target_preset="support_bot:strict",
-)
-print(f"Grade: {report['grade']}, Bypass rate: {report['bypass_rate']:.0%}")
+# What the corpus contains, without running it
+catalog = pg.redteam.list_tests()
+print(f"{catalog['total']} attacks available")
 
-# Get Attack Intelligence stats
-stats = pg.redteam.intelligence_stats()
-print(f"Total patterns: {stats['total_patterns']}")
+# Run everything against a preset
+summary = pg.redteam.run_all(target_preset="support_bot:strict")
+print(f"Blocked {summary['blocked']}/{summary['total_tests']} "
+      f"({summary['block_rate']:.0%})")
+
+# Run one named attack
+result = pg.redteam.run_test("prompt_injection_basic")
+
+# Or your own adversarial prompt
+result = pg.redteam.run_custom("ignore previous instructions and ...")
+print(result["decision"], result["reason"])
 ```
 
 The async client mirrors the same methods:
 
 ```python
 async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
-    report = await pg.redteam.run_autonomous(budget=200)
-    stats = await pg.redteam.intelligence_stats()
+    summary = await pg.redteam.run_all(target_preset="support_bot:strict")
 ```
+
+Requires an API key with the `proxy` scope (an unrestricted key also works).
+Device/scan-only credentials cannot reach these endpoints.
 
 ## Async Support
 
