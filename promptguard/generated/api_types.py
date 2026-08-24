@@ -316,8 +316,54 @@ class GuardrailDelta(TypedDict, total=False):
     threshold: float | Any
 
 
+class GuardrailsConfig(TypedDict, total=False):
+    """Full per-guardrail configuration for a project."""
+
+    prompt_injection: LevelConfig
+    pii_detection: PIIDetectionConfig
+    toxicity: ToxicityConfig
+    data_exfiltration: LevelConfig
+    secret_key_detection: LevelConfig
+    url_filtering: ToggleOnlyConfig
+    fraud_detection: ToggleOnlyConfig
+    malware_detection: ToggleOnlyConfig
+    jailbreak_detection: ToggleOnlyConfig
+    tool_injection: ToggleOnlyConfig
+    hallucination: HallucinationConfig
+    mcp_security: MCPSecurityConfig
+
+
+class GuardrailsResponse(TypedDict):
+    guardrails: GuardrailsConfig
+
+
+class GuardrailsUpdateRequest(TypedDict):
+    guardrails: GuardrailsConfig
+
+
 class HTTPValidationError(TypedDict, total=False):
     detail: list[ValidationError]
+
+
+class HallucinationConfig(TypedDict, total=False):
+    enabled: bool
+    action: Literal["metadata", "flag", "block"]
+    block_threshold: float
+
+
+class LevelConfig(TypedDict, total=False):
+    """Guardrail with a strict/moderate/permissive sensitivity level."""
+
+    enabled: bool
+    level: Literal["strict", "moderate", "permissive"]
+
+
+class MCPSecurityConfig(TypedDict, total=False):
+    enabled: bool
+    server_allowlist: list[str]
+    server_blocklist: list[str]
+    enforce_schema_validation: bool
+    max_argument_size_bytes: int
 
 
 class ManagedPolicyResponse(TypedDict, total=False):
@@ -384,6 +430,13 @@ class OverlayWarningOut(TypedDict):
     severity: Literal["warning", "critical"]
 
 
+class PIIDetectionConfig(TypedDict, total=False):
+    enabled: bool
+    level: Literal["strict", "moderate", "permissive"]
+    mode: Literal["redact", "mask", "block"]
+    entities: list[str] | Any
+
+
 class QuotaErrorDetail(TypedDict, total=False):
     message: str
     # 'quota_exceeded' or 'spending_limit_exceeded'
@@ -448,6 +501,52 @@ class ShadowReportOut(TypedDict):
     examples: dict[str, Any]
 
 
+class TestCatalog(TypedDict):
+    """What a caller can run -- so a CLI can list before it picks."""
+
+    total: int
+    tests: list[TestInfo]
+
+
+class TestInfo(TypedDict):
+    """One attack in the corpus, without running it."""
+
+    name: str
+    category: str
+    description: str
+    expected_result: str
+
+
+class TestRequest(TypedDict, total=False):
+    """Body for run-all (where custom_prompt is ignored) and run-custom."""
+
+    custom_prompt: str | Any
+    target_preset: str
+
+
+class TestResponse(TypedDict):
+    """One attack prompt and what the policy engine decided about it."""
+
+    test_name: str
+    prompt: str
+    decision: str
+    reason: str
+    threat_type: str | Any
+    confidence: float | Any
+    blocked: bool
+
+
+class TestSummary(TypedDict):
+    """The whole corpus, plus the block rate that is the headline number."""
+
+    total_tests: int
+    blocked: int
+    allowed: int
+    # blocked / total_tests; 0.0 for an empty corpus, never a divide-by-zero.
+    block_rate: float
+    results: list[TestResponse]
+
+
 class ThreatDetail(TypedDict, total=False):
     """Individual threat found during scanning."""
 
@@ -456,6 +555,16 @@ class ThreatDetail(TypedDict, total=False):
     details: str
     # severity_score * confidence, clamped to [0, 1]. The decision-driving number when a severity-carrying detector (e.g. structural heuristics) fired; null when confidence alone is the signal.
     weighted_score: float | Any
+
+
+class ToggleOnlyConfig(TypedDict, total=False):
+    enabled: bool
+
+
+class ToxicityConfig(TypedDict, total=False):
+    enabled: bool
+    threshold: float
+    categories: list[str] | Any
 
 
 class UnscannedAttachment(TypedDict):
