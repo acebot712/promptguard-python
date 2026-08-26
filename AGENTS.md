@@ -76,3 +76,17 @@ Always run `ruff check` and `ruff format` after editing Python files.
 - Add heavyweight runtime dependencies (the SDK should stay lightweight)
 - Break the public API without a major version bump
 - Modify `guard-contract.json` without coordinating with the Node.js SDK
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, worked via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` plus `docs/adr/` at the repo root, both created lazily. See `docs/agents/domain.md`.
