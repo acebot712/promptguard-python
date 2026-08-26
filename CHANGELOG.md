@@ -12,6 +12,29 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-08-24
+
+### Fixed
+
+- **The red team client was unreachable for every customer.** Every method on
+  `client.redteam` targeted `/internal/redteam`, which is the platform-admin
+  plane and rejects an API key outright — so the namespace could not have
+  worked for anyone holding a `pg_live_` key, whatever they did. It now targets
+  the customer-facing `/api/v1/security-testing`.
+
+### Removed
+
+- **BREAKING — three namespaces that could only ever 404 are gone**, in both
+  the sync and async clients: `completions`, `embeddings` and `scrape`, along
+  with `redteam.run_autonomous()` and `redteam.intelligence_stats()`. Nothing
+  that worked has been taken away — there was never a working implementation
+  behind them — but removing public attributes from a published client is a
+  backwards-incompatible change, so it takes a major version.
+
+  There is no replacement, because there was nothing to replace. For chat
+  traffic, use `client.chat.completions.create(...)`, which is unchanged.
+
+
 ## [1.13.0] — 2026-08-16
 
 ### Added
