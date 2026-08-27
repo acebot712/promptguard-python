@@ -109,24 +109,39 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      # Fetched from the PUBLIC docs URL, with no token and no
+      # `continue-on-error`. Both of those went together, and together they
+      # made this gate incapable of failing.
+      #
+      # It used to pull the spec from the private monorepo's contents API,
+      # which needs OPENAPI_SPEC_TOKEN. That secret has never been provisioned
+      # on this repository. So the step exited 1, `continue-on-error: true`
+      # swallowed it, the validation step below was skipped by
+      # `if: outcome == 'success'`, and the job reported SUCCESS having
+      # compared nothing. Confirmed against real runs: every recorded
+      # `Validate API Contract` concluded success without once invoking the
+      # validator.
+      #
+      # The same document is published unauthenticated at the URL below -- it
+      # is what the `sync-from-api` workflow already fetches, and it was
+      # verified byte-identical to the copy committed in the monorepo. So the
+      # token bought nothing except the failure mode.
+      #
+      # `--fail` makes a non-2xx a real failure now that nothing swallows it,
+      # and that is a DELIBERATE new way for this job to go red: CI now depends
+      # on docs.promptguard.co being reachable. That is the point -- the
+      # alternative is the state this replaces, where the gate could not fail
+      # for any reason at all. `--retry 3` absorbs a transient CDN blip; a
+      # sustained outage should stop us claiming the SDK matches a spec we
+      # could not read. The `sync-from-api` workflow already takes the same
+      # dependency on the same URL.
       - name: Download OpenAPI spec
-        id: download-spec
-        continue-on-error: true
-        env:
-          SPEC_TOKEN: ${{ secrets.OPENAPI_SPEC_TOKEN }}
         run: |
-          if [ -z "$SPEC_TOKEN" ]; then
-            echo "OPENAPI_SPEC_TOKEN not set, skipping validation"
-            exit 1
-          fi
-          curl -sfL \
-            -H "Authorization: token $SPEC_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/acebot712/promptguard/contents/apps/docs/api-reference/openapi-developer.json?ref=main" \
-            -o openapi-developer.json
+          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
+            -o openapi-developer.json \
+            "https://docs.promptguard.co/api-reference/openapi-developer.json"
 
       - name: Validate SDK types against spec
-        if: steps.download-spec.outcome == 'success'
         run: python tests/validate_openapi.py openapi-developer.json
 
   build:
