@@ -28,8 +28,17 @@ tests/
 
 ```bash
 pip install -e ".[dev]"
-pre-commit install               # Optional: enable hooks
+pre-commit install               # tracked git hooks; do this once per clone
 ```
+
+Not optional any more: `pre-commit install` wires the push stage too, and that
+stage runs a gitleaks scan of the commits you are pushing. This package is
+published to PyPI and the repo is public, so a credential reaching `main` is
+world-readable at once — and CI runs no secret scanning, so this hook is the
+only one there is. It is scoped to the pushed range on purpose: scanning the
+tree or the history fails on its first run and teaches everyone `--no-verify`.
+Fixtures that must look like credentials (the config-repr redaction tests) are
+exempted by path in `.gitleaks.toml`, where the exemption is reviewable.
 
 ## Building and Testing
 

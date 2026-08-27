@@ -3,15 +3,40 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        stages: [pre-commit]
       - id: end-of-file-fixer
+        stages: [pre-commit]
       - id: check-merge-conflict
+        stages: [pre-commit]
       - id: check-yaml
+        stages: [pre-commit]
       - id: check-added-large-files
+        stages: [pre-commit]
       - id: detect-private-key
+        stages: [pre-commit]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.20
     hooks:
       - id: ruff
+        stages: [pre-commit]
         args: [--fix]
       - id: ruff-format
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      # Secret scanning at PUSH time. This package is published to PyPI and the
+      # repo is public, so a credential reaching main is world-readable at once
+      # -- and CI here runs no secret scanning at all, so this is the only one.
+      - id: gitleaks-push
+        name: Secret scan the commits being pushed (gitleaks)
+        entry: scripts/hooks/gitleaks-push.sh
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+# A hook with no `stages` runs at every stage, so the hooks above are pinned to
+# pre-commit and the scan to pre-push.
+default_install_hook_types: [pre-commit, pre-push]

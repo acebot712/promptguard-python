@@ -1,0 +1,12 @@
+# gitleaks configuration for promptguard-python.
+#
+# Extends the stock rules; the allowlist names test fixtures that are SUPPOSED
+# to look like credentials, because the code under test redacts them. An
+# exemption belongs here, written down and reviewable, rather than in
+# somebody's `--no-verify`.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Config-repr redaction tests: they assert a key-shaped value is masked, so it has to be key-shaped."
+paths = ['''tests/test_audit_fixes\.py''']
