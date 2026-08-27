@@ -1,0 +1,183 @@
+name: Sync Types from API Spec (reusable)
+
+# Shared by promptguard-python's own sync-from-api.yml and
+# promptguard-node's (via `uses: acebot712/promptguard-python/.github/...`).
+# The two callers' workflows were a near-1:1 duplicate of this job, differing
+# only in the language toolchain and a few filenames -- see this repo's
+# sync-from-api.yml for the python inputs, and promptguard-node's for the
+# node ones. Hosted here rather than a dedicated shared-infra repo: there are
+# exactly two callers today, and a third repo just for this would be more
+# ceremony than the ~150 duplicated lines it replaces.
+
+on:
+  workflow_call:
+    inputs:
+      runtime:
+        description: "'node' or 'python' -- selects which language toolchain to set up"
+        type: string
+        required: true
+      install-command:
+        description: 'Command to install dependencies'
+        type: string
+        required: true
+      generate-types-command:
+        description: 'Command to regenerate types from openapi-developer.json'
+        type: string
+        required: true
+      adopt-contract-command:
+        description: 'Command to adopt guard-contract.upstream.json into the repo'
+        type: string
+        required: true
+      validate-command:
+        description: 'Command(s) that lint/typecheck/test the SDK against the freshly generated artifacts'
+        type: string
+        required: true
+      generated-types-path:
+        description: 'Path (file or directory) the generated types land in, for git diff/add'
+        type: string
+        required: true
+      generated-types-file-label:
+        description: 'The generated types file path, as shown in the PR body table'
+        type: string
+        required: true
+      sibling-sdk-name:
+        description: "The OTHER SDK's display name, for the PR body's cross-check note (e.g. 'the Node SDK')"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync-types:
+    name: Generate Types from OpenAPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - if: inputs.runtime == 'node'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - if: inputs.runtime == 'python'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      # Public docs URL serves the same file the monorepo generates. No
+      # auth, no rate-limit cliff. `--retry` covers a transient CDN hiccup;
+      # `--fail` makes a non-2xx exit nonzero.
+      - name: Download latest OpenAPI spec
+        run: |
+          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
+            -o openapi-developer.json \
+            "https://docs.promptguard.co/api-reference/openapi-developer.json"
+
+      - name: Generate types
+        run: ${{ inputs.generate-types-command }}
+
+      # The cross-SDK contract is a second artifact from the same monorepo,
+      # published to a public URL by `make docs` the same way the spec above
+      # is. NOT docs.promptguard.co, where the spec lives: Mintlify serves
+      # only the JSON that docs.json registers as an OpenAPI source.
+      - name: Download latest cross-SDK contract
+        run: |
+          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
+            -o guard-contract.upstream.json \
+            "https://promptguard.co/contracts/guard-contract.json"
+
+      # Writes tests/guard-contract.json AND tests/guard-contract.lock.json.
+      # Nothing is pushed here -- the validation below decides whether this
+      # becomes a reviewable PR or a red build.
+      - name: Adopt the contract
+        run: ${{ inputs.adopt-contract-command }}
+
+      # Runs AFTER both artifacts are updated, so a green run means the SDK
+      # satisfies the new types and the new contract. If the contract moved
+      # in a way this SDK does not implement yet, the job fails here and no
+      # PR opens -- which is the correct outcome: that needs a person, not a
+      # merge button.
+      - name: Validate SDK still passes
+        run: ${{ inputs.validate-command }}
+
+      - name: Check for changes
+        id: diff
+        run: |
+          # Reported separately so the PR body says which artifact moved. A
+          # contract change and a types change have different reviewers and
+          # different blast radii.
+          if git diff --quiet "${{ inputs.generated-types-path }}"; then
+            echo "types_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "types_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if git diff --quiet tests/guard-contract.json tests/guard-contract.lock.json; then
+            echo "contract_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "contract_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if git diff --quiet "${{ inputs.generated-types-path }}" tests/guard-contract.json tests/guard-contract.lock.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The bot commit needs an identity. Use the standard
+          # github-actions[bot] identity; PRs land authored by the bot
+          # which is the right signal in the audit log.
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          # Unique branch per run avoids collisions when the daily sync
+          # branch already exists from a prior failed run.
+          BRANCH="auto/sync-api-types-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+          git add "${{ inputs.generated-types-path }}" tests/guard-contract.json tests/guard-contract.lock.json
+          git commit -m "chore: sync generated types and cross-SDK contract from upstream"
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: sync generated API types" \
+            --body "$(cat <<'EOF'
+          ## Auto-synced from the platform monorepo
+
+          | Artifact | Source | Changed |
+          |---|---|---|
+          | `${{ inputs.generated-types-file-label }}` | `openapi-developer.json` | ${{ steps.diff.outputs.types_changed }} |
+          | `tests/guard-contract.json` | `guard-contract.json` | ${{ steps.diff.outputs.contract_changed }} |
+
+          **Types**: definitions only. No client code, patches, or integrations
+          were modified. If new types were added, consider importing them in
+          hand-written code where useful.
+
+          **Contract**: the cross-SDK contract is vendored, not owned here --
+          ${{ inputs.sibling-sdk-name }} must satisfy the same file. A change
+          means upstream changed the agreed behaviour, so read it rather than
+          rubber-stamping it, and check whether ${{ inputs.sibling-sdk-name }}
+          has the matching PR. `tests/guard-contract.lock.json` records the
+          digest and moves with it.
+
+          Lint, type-check and the full test suite passed **against these
+          updated artifacts** -- this PR does not exist unless they did.
+
+          Triggered by: ${{ github.event_name }} at ${{ github.run_id }}
+          EOF
+          )"

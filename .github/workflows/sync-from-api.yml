@@ -21,135 +21,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # See ./_sync-from-api.yml -- shared with promptguard-node, which calls
+  # this same file remotely. Hosted here rather than a dedicated shared-infra
+  # repo: two callers today doesn't clear the bar for a third repo.
   sync-types:
-    name: Generate Types from OpenAPI
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-          cache: 'pip'
-          cache-dependency-path: pyproject.toml
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Download latest OpenAPI spec
-        run: |
-          # Public docs URL serves the same file the monorepo generates.
-          # No auth, no rate-limit cliff. ``--retry`` covers a transient
-          # CDN hiccup; ``--fail`` makes a non-2xx exit nonzero.
-          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
-            -o openapi-developer.json \
-            "https://docs.promptguard.co/api-reference/openapi-developer.json"
-
-      - name: Generate types
-        run: python scripts/generate_types_from_spec.py openapi-developer.json
-
-      # The cross-SDK contract is a second artifact from the same monorepo, and
-      # until 2026-08-11 it was the one nothing fetched. It was hand-copied into
-      # tests/, so the monorepo source drifted two minor versions BEHIND its own
-      # copies and sat there five months. `make docs` now publishes it to a
-      # public URL, which makes it fetchable exactly like the spec above.
-      #
-      # NOT docs.promptguard.co, where the spec lives: Mintlify serves only the
-      # JSON that docs.json registers as an OpenAPI source. Measured against the
-      # live site, /docs.json and /package.json are both 404 despite being in
-      # the tree and absent from .mintignore. apps/landing/public/ is a plain
-      # static mount and serves whatever it holds.
-      - name: Download latest cross-SDK contract
-        run: |
-          curl --retry 3 --retry-delay 2 --fail --silent --show-error \
-            -o guard-contract.upstream.json \
-            "https://promptguard.co/contracts/guard-contract.json"
-
-      # Writes tests/guard-contract.json AND tests/guard-contract.lock.json.
-      # Nothing is pushed here -- the test run below decides whether this
-      # becomes a reviewable PR or a red build.
-      - name: Adopt the contract
-        run: python scripts/sync_guard_contract.py guard-contract.upstream.json
-
-      # Runs AFTER both artifacts are updated, so a green run means the SDK
-      # satisfies the new types and the new contract. If the contract moved in a
-      # way this SDK does not implement yet, the job fails here and no PR opens
-      # -- which is the correct outcome: that needs a person, not a merge button.
-      - name: Validate SDK still passes
-        run: |
-          ruff check .
-          pytest tests/ -v
-
-      - name: Check for changes
-        id: diff
-        run: |
-          # Reported separately so the PR body says which artifact moved. A
-          # contract change and a types change have different reviewers and
-          # different blast radii.
-          if git diff --quiet promptguard/generated/; then
-            echo "types_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "types_changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-          if git diff --quiet tests/guard-contract.json tests/guard-contract.lock.json; then
-            echo "contract_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "contract_changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-          if git diff --quiet promptguard/generated/ tests/guard-contract.json tests/guard-contract.lock.json; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create PR
-        if: steps.diff.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # The bot commit needs an identity. Use the standard
-          # github-actions[bot] identity; PRs land authored by the bot
-          # which is the right signal in the audit log.
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-
-          # Unique branch per run avoids collisions when the daily
-          # sync branch already exists from a prior failed run.
-          BRANCH="auto/sync-api-types-${{ github.run_id }}"
-          git checkout -b "$BRANCH"
-          git add promptguard/generated/ tests/guard-contract.json tests/guard-contract.lock.json
-          git commit -m "chore: sync generated types and cross-SDK contract from upstream"
-          git push -u origin "$BRANCH"
-
-          gh pr create \
-            --title "chore: sync generated API types" \
-            --body "$(cat <<'EOF'
-          ## Auto-synced from the platform monorepo
-
-          | Artifact | Source | Changed |
-          |---|---|---|
-          | `promptguard/generated/api_types.py` | `openapi-developer.json` | ${{ steps.diff.outputs.types_changed }} |
-          | `tests/guard-contract.json` | `guard-contract.json` | ${{ steps.diff.outputs.contract_changed }} |
-
-          **Types**: definitions only (TypedDicts). No client code, patches, or
-          integrations were modified. If new types were added, consider importing
-          them in hand-written code where useful.
-
-          **Contract**: the cross-SDK contract is vendored, not owned here -- the
-          Node SDK must satisfy the same file. A change means upstream changed
-          the agreed behaviour, so read it rather than rubber-stamping it, and
-          check whether promptguard-node has the matching PR.
-          `tests/guard-contract.lock.json` records the digest and moves with it.
-
-          `ruff check` and the full `pytest` suite passed **against these updated
-          artifacts** -- this PR does not exist unless they did.
-
-          Triggered by: ${{ github.event_name }} at ${{ github.run_id }}
-          EOF
-          )"
+    uses: ./.github/workflows/_sync-from-api.yml
+    with:
+      runtime: python
+      install-command: pip install -e ".[dev]"
+      generate-types-command: python scripts/generate_types_from_spec.py openapi-developer.json
+      adopt-contract-command: python scripts/sync_guard_contract.py guard-contract.upstream.json
+      validate-command: |
+        ruff check .
+        pytest tests/ -v
+      generated-types-path: promptguard/generated/
+      generated-types-file-label: promptguard/generated/api_types.py
+      sibling-sdk-name: the Node SDK
