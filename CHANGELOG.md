@@ -12,6 +12,18 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-08-30
+
+### Added
+
+- Generated API types for the full per-guardrail project configuration:
+  `GuardrailsConfig`, `LevelConfig`, `PIIDetectionConfig`, `ToxicityConfig` and
+  `ToggleOnlyConfig`. Synced from the platform's OpenAPI spec, so a client
+  configuring guardrails now has types for the shape the API accepts instead of
+  hand-writing dicts.
+
+Additive only — nothing in 2.0.0 changed behaviour or signature.
+
 ## [2.0.0] — 2026-08-24
 
 ### Fixed
