@@ -125,15 +125,6 @@ class AgentTraceResponse(TypedDict, total=False):
     event_id: str
 
 
-class ApiKeyFullResponse(TypedDict):
-    """Response containing the full API key for copy functionality"""
-
-    id: str
-    name: str
-    prefix: str
-    key: str
-
-
 class ApiKeyResponse(TypedDict, total=False):
     id: str
     name: str
@@ -329,6 +320,7 @@ class GuardrailsConfig(TypedDict, total=False):
     malware_detection: ToggleOnlyConfig
     jailbreak_detection: ToggleOnlyConfig
     tool_injection: ToggleOnlyConfig
+    multi_turn_drift: ToggleOnlyConfig
     hallucination: HallucinationConfig
     mcp_security: MCPSecurityConfig
 
@@ -367,7 +359,7 @@ class MCPSecurityConfig(TypedDict, total=False):
 
 
 class ManagedPolicyResponse(TypedDict, total=False):
-    """The managed update policy an enrolled Shadow AI device should apply. ``fleet`` reflects the org's ``shadow_ai_fleet`` entitlement; when false the other fields are null and the device keeps its local user preference."""
+    """The managed update policy an enrolled Shadow AI device should apply. ``fleet`` reflects the org's ``shadow_fleet_management`` entitlement; when false the other fields are null and the device keeps its local user preference."""
 
     fleet: bool
     force_update_mode: str | Any
@@ -433,8 +425,19 @@ class OverlayWarningOut(TypedDict):
 class PIIDetectionConfig(TypedDict, total=False):
     enabled: bool
     level: Literal["strict", "moderate", "permissive"]
-    mode: Literal["redact", "mask", "block"]
+    mode: Literal["redact", "mask", "block", "tokenize"]
     entities: list[str] | Any
+
+
+class ProjectResponse(TypedDict, total=False):
+    id: str
+    name: str
+    description: str | Any
+    fail_mode: str
+    use_case: str
+    strictness_level: str
+    zero_retention: bool
+    created_at: str
 
 
 class QuotaErrorDetail(TypedDict, total=False):
@@ -518,7 +521,7 @@ class TestInfo(TypedDict):
 
 
 class TestRequest(TypedDict, total=False):
-    """Body for run-all (where custom_prompt is ignored) and run-custom."""
+    """Body for run-all (where custom_prompt is ignored) and run-custom. ``target_preset`` is either the literal ``"default"`` (the wire default, resolved as the "default" use case at "moderate" strictness) or a composed ``"use_case:strictness"`` pair -- the vocabularies served by ``GET /dashboard/presets/use-cases`` and ``GET /dashboard/presets/ strictness-levels``. Anything else is rejected with a 422; it used to be silently substituted with the default engine, which made every preset selector a no-op."""
 
     custom_prompt: str | Any
     target_preset: str
@@ -536,14 +539,16 @@ class TestResponse(TypedDict):
     blocked: bool
 
 
-class TestSummary(TypedDict):
+class TestSummary(TypedDict, total=False):
     """The whole corpus, plus the block rate that is the headline number."""
 
     total_tests: int
     blocked: int
     allowed: int
-    # blocked / total_tests; 0.0 for an empty corpus, never a divide-by-zero.
+    # blocked / total_tests over COMPLETED probes; 0.0 for an empty corpus, never a divide-by-zero. Errored probes are excluded from total_tests.
     block_rate: float
+    # Probes the engine could not complete (the evaluator raised). Excluded from total_tests and the block rate; a CI caller can fail on this to catch 'the scan did not complete' rather than mistaking it for a pass.
+    errors: int
     results: list[TestResponse]
 
 
@@ -624,14 +629,3 @@ class developer__projects__schemas__CreateProjectRequest(TypedDict, total=False)
     fail_mode: Literal["open", "closed"]
     use_case: str
     strictness_level: Literal["strict", "moderate", "permissive"]
-
-
-class developer__projects__schemas__ProjectResponse(TypedDict, total=False):
-    id: str
-    name: str
-    description: str | Any
-    fail_mode: str
-    use_case: str
-    strictness_level: str
-    zero_retention: bool
-    created_at: str
