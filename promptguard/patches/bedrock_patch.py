@@ -15,7 +15,13 @@ from promptguard.patches._base import wrap_sync
 
 logger = logging.getLogger("promptguard")
 
-NAME = "boto3-bedrock"
+# Names the PROVIDER, not the transport library this patch happens to hook.
+# It was "boto3-bedrock" until the cross-SDK contract grew an
+# `instrumentation_introspection` section: the Node SDK has always reported
+# "bedrock", so `patched_sdks()` and `getAppliedPatches()` disagreed and a
+# customer's cross-language health check got different answers for the same
+# provider. The contract now pins this vocabulary for both SDKs.
+NAME = "bedrock"
 
 # Import names that mean "this patch is relevant". `auto.py` compares these
 # against what actually got hooked, so an installed-but-unhooked library is

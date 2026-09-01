@@ -319,3 +319,79 @@ class TestPayloadContract:
                 context=args.get("context"),
             )
             assert payload == case["expect"], f"{case['name']}: mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Auto-instrumentation introspection
+# ---------------------------------------------------------------------------
+
+
+class TestInstrumentationIntrospectionContract:
+    """The surface that drifted while nothing was watching it.
+
+    Everything above this class describes the wire: what the Guard API sends
+    and what the SDK must make of it. This section describes what
+    auto-instrumentation says about *itself*, which is the part a customer
+    asserts on in their own CI -- and which matched across the two SDKs only
+    by memory until the contract grew this section.
+
+    Cases are keyed by name rather than run in a loop, because each one
+    checks a different property and a shared loop body would only obscure
+    that.
+    """
+
+    @staticmethod
+    def _case(contract, name):
+        section = contract.get("instrumentation_introspection")
+        assert section, (
+            "the vendored contract has no instrumentation_introspection section. "
+            f"It arrived in v1.6.0; this copy is v{contract.get('_version')}. Take "
+            "the PR that .github/workflows/sync-from-api.yml opens."
+        )
+        for case in section["cases"]:
+            if case["name"] == name:
+                return case
+        raise AssertionError(f"no case named {name!r} in instrumentation_introspection")
+
+    def test_report_exposes_exactly_the_contracted_keys(self, contract):
+        from promptguard.auto import instrumentation_report
+
+        case = self._case(contract, "report_exposes_exactly_these_keys")
+        assert sorted(instrumentation_report()) == sorted(case["expect_report_keys"])
+
+    def test_advice_url_is_the_contracted_one(self, contract):
+        from promptguard.auto import instrumentation_report
+
+        case = self._case(contract, "advice_url_is_the_same_in_both_sdks")
+        assert instrumentation_report()["advice_url"] == case["expect_advice_url"]
+
+    def test_patch_name_vocabulary_matches_the_contract(self, contract):
+        """The Bedrock patch reported ``boto3-bedrock`` here and ``bedrock`` in
+        Node, so the same health check answered differently per language. This
+        is the assertion that would have caught it."""
+        from promptguard.auto import _known_patches
+
+        case = self._case(contract, "patch_name_vocabulary_is_the_same_in_both_sdks")
+        assert sorted(p.NAME for p in _known_patches()) == sorted(case["expect_patch_names"])
+
+    def test_patched_and_detected_unpatched_are_disjoint(self, contract):
+        from promptguard.auto import instrumentation_report
+
+        case = self._case(contract, "patched_and_detected_unpatched_are_disjoint")
+        report = instrumentation_report()
+        left, right = case["expect_disjoint"]
+        assert not (set(report[left]) & set(report[right]))
+
+    def test_detected_unpatched_is_sorted_and_unique(self, contract):
+        from promptguard.auto import instrumentation_report
+
+        case = self._case(contract, "detected_unpatched_is_sorted_and_free_of_duplicates")
+        values = instrumentation_report()[case["expect_sorted_unique"]]
+        assert values == sorted(set(values))
+
+    def test_nothing_is_patched_after_shutdown(self, contract):
+        import promptguard.auto as auto
+
+        case = self._case(contract, "nothing_is_patched_before_init_or_after_shutdown")
+        auto.shutdown()
+        assert auto.instrumentation_report()["patched"] == case["expect"]["patched"]

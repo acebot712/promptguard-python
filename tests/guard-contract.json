@@ -1,6 +1,6 @@
 {
   "_description": "Shared contract tests for PromptGuard SDKs. Both Python and Node SDKs MUST pass all cases in this file. If you add a feature to one SDK, add a test case here first.",
-  "_version": "1.5.1",
+  "_version": "1.6.0",
 
   "guard_decision": {
     "description": "GuardDecision must parse these API response bodies correctly.",
@@ -409,6 +409,46 @@
           "model": "gpt-5-nano",
           "context": { "framework": "langchain" }
         }
+      }
+    ]
+  },
+
+  "instrumentation_introspection": {
+    "description": "What auto-instrumentation reports about itself. Both SDKs must expose the same facts, under the same keys, spelled in each language's own convention -- snake_case in Python, camelCase in Node. Keys are written snake_case below and each SDK maps them. This section exists because everything outside the contract matched only by memory, and this surface had already drifted: Python reported the Bedrock patch as `boto3-bedrock` while Node reported `bedrock`, so the same health check gave different answers in the two languages.",
+    "cases": [
+      {
+        "name": "report_exposes_exactly_these_keys",
+        "expect_report_keys": ["advice_url", "detected_unpatched", "patched"]
+      },
+      {
+        "name": "advice_url_is_the_same_in_both_sdks",
+        "expect_advice_url": "https://docs.promptguard.co/integrations/auto-instrumentation"
+      },
+      {
+        "name": "patch_name_vocabulary_is_the_same_in_both_sdks",
+        "_comment": "The name each provider patch reports in `patched`. These name the PROVIDER, never the transport library the patch happens to hook, because a customer asserts on these strings across both languages.",
+        "expect_patch_names": [
+          "anthropic",
+          "bedrock",
+          "cohere",
+          "google-genai",
+          "google-generativeai",
+          "openai"
+        ]
+      },
+      {
+        "name": "patched_and_detected_unpatched_are_disjoint",
+        "_comment": "A library cannot be both hooked and reported as missed. Package naming is ecosystem-specific (`@google/genai` against `google.genai`), so the contract pins the invariant rather than the strings.",
+        "expect_disjoint": ["patched", "detected_unpatched"]
+      },
+      {
+        "name": "detected_unpatched_is_sorted_and_free_of_duplicates",
+        "expect_sorted_unique": "detected_unpatched"
+      },
+      {
+        "name": "nothing_is_patched_before_init_or_after_shutdown",
+        "given": "shutdown",
+        "expect": { "patched": [] }
       }
     ]
   }
