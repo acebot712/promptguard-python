@@ -12,6 +12,32 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-09-06
+
+### Added
+
+- **`tokenize` is a valid `pii_detection.mode` in the generated types.** The
+  `PiiDetectionConfig` mode literal listed `redact`, `mask` and `block` only, so
+  a type-checked project passing `tokenize` — the reversible mode the API has
+  always accepted — failed at the type checker rather than at the API. The same
+  gap was fixed in the CLI's `policy apply` in cli-v2.1.0.
+- **`multi_turn_drift`** appears on the detector-configuration type.
+
+### Changed
+
+- The managed-update-policy docstring names the `shadow_fleet_management`
+  entitlement, which is what the API actually reads; it previously said
+  `shadow_ai_fleet`.
+
+### Removed
+
+- **`ApiKeyFullResponse` is gone from the generated types**, following the
+  removal of the key-reveal endpoint it described. Not a major bump: the
+  generated module declares itself type-only, is not re-exported from
+  `promptguard`, and the name is not in the package's public surface. It was
+  still reachable as `promptguard.generated.api_types.ApiKeyFullResponse`, so a
+  project that imported it directly will need to drop it.
+
 ## [2.1.0] — 2026-08-30
 
 ### Added
