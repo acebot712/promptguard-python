@@ -217,6 +217,8 @@ class EnrollResponse(TypedDict, total=False):
     fail_closed: bool
     end_user_label: str | Any
     account_name: str | Any
+    identity_verified: bool
+    account_email: str | Any
     account_type: str
 
 
@@ -248,6 +250,23 @@ class GuardContext(TypedDict, total=False):
     tool_calls: list[dict[str, Any]] | Any
     # Arbitrary framework-specific metadata (not scanned)
     metadata: dict[str, Any] | Any
+
+
+class GuardEntitlement(TypedDict):
+    """What the calling account is entitled to, as the engine knew it here. Composed from the same subscription row the scan was just counted against, so it cannot be stale while a scan is in flight. Why it rides the scan response rather than an endpoint of its own, and why it carries no price, are ADR-0018; the reasoning lives there and not in four docstrings."""
+
+    # Plan identifier, e.g. 'free', 'shadow_team'
+    plan: str
+    # Seats on the subscription, mirrored from the Stripe quantity. Always 1 on a flat-rate Plan, which does not bill per seat.
+    seats: int
+    # Scans counted against the org's pool this month, INCLUDING the one being answered.
+    scans_used: int
+    # The month's pool. The enforced figure, not one recomputed from the Plan grid, so it carries a per-contract override where one exists.
+    scan_allowance: int
+    # How the client should run: 'full' while the engine arbitrates, or 'redact_only' once the entitlement is spent or lapsed, where an on-device detection masks rather than refuses. A client that does not recognise the value must treat it as unknown and keep running as it was, never as a default.
+    mode: str
+    # When this reading was taken (UTC). Not the scan's timestamp.
+    as_of: str
 
 
 class GuardMessage(TypedDict, total=False):
@@ -297,6 +316,8 @@ class GuardResponse(TypedDict, total=False):
     latency_ms: float
     # Parts that reached us and produced nothing to scan. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block, unsupported_tool_call (an entry in `context.tool_calls` in none of the shapes we can read — `index` is its position in that list).
     unscanned: list[UnscannedAttachment]
+    # What this account is entitled to, at the instant this scan was answered. Null when the engine cannot say — an account with no subscription row, an admin key that bypasses the counter, or a row it could not read. Null is 'unknown', NOT 'unentitled': a client that reads it as a limit has invented a refusal the engine never made.
+    entitlement: GuardEntitlement | Any
 
 
 class GuardrailDelta(TypedDict, total=False):
@@ -521,22 +542,26 @@ class TestInfo(TypedDict):
 
 
 class TestRequest(TypedDict, total=False):
-    """Body for run-all (where custom_prompt is ignored) and run-custom. ``target_preset`` is either the literal ``"default"`` (the wire default, resolved as the "default" use case at "moderate" strictness) or a composed ``"use_case:strictness"`` pair -- the vocabularies served by ``GET /dashboard/presets/use-cases`` and ``GET /dashboard/presets/ strictness-levels``. Anything else is rejected with a 422; it used to be silently substituted with the default engine, which made every preset selector a no-op."""
+    """Body for run-all (where custom_prompt is ignored) and run-custom. ``target_preset`` names the policy to test. A composed ``"use_case:strictness"`` pair is used as given; a bare use case means that use case at moderate strictness; a bare strictness level means the default use case at that strictness -- so the wire default ``"default"`` is ``default:moderate`` and ``"strict"`` is ``default:strict``. The vocabularies are the ones served by ``GET /dashboard/presets/use-cases`` and ``GET /dashboard/presets/strictness-levels``. Anything else is a 400 that lists the valid composed names; it used to be silently substituted with the default engine, which made every preset selector a no-op."""
 
     custom_prompt: str | Any
+    # Policy to test: 'use_case:strictness', a bare use case (moderate strictness), or a bare strictness level (default use case). Unknown names are rejected with 400 invalid_preset.
     target_preset: str
 
 
-class TestResponse(TypedDict):
+class TestResponse(TypedDict, total=False):
     """One attack prompt and what the policy engine decided about it."""
 
     test_name: str
     prompt: str
+    # "block", "allow", or "error" when the probe did not complete.
     decision: str
     reason: str
     threat_type: str | Any
     confidence: float | Any
     blocked: bool
+    # True when the engine raised while evaluating this prompt. Not a verdict: an errored probe is neither blocked nor allowed, and is excluded from the summary's block_rate.
+    errored: bool
 
 
 class TestSummary(TypedDict, total=False):
@@ -548,7 +573,9 @@ class TestSummary(TypedDict, total=False):
     # blocked / total_tests over COMPLETED probes; 0.0 for an empty corpus, never a divide-by-zero. Errored probes are excluded from total_tests.
     block_rate: float
     # Probes the engine could not complete (the evaluator raised). Excluded from total_tests and the block rate; a CI caller can fail on this to catch 'the scan did not complete' rather than mistaking it for a pass.
-    errors: int
+    errored_count: int
+    # Which arithmetic produced block_rate. 2: errored probes are reported in errored_count and excluded from the rate. 1 (never sent; before 2026-09-03) graded evaluator exceptions by their message text.
+    report_version: int
     results: list[TestResponse]
 
 
