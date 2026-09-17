@@ -12,6 +12,15 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-09-18
+
+### Changed
+
+- **Generated types and the cross-SDK contract re-synced from the platform API**
+  (#40). Types only: no runtime behaviour changes. Published so the package on
+  PyPI matches the contract the API now serves.
+
+
 ## [2.2.0] — 2026-09-06
 
 ### Added
