@@ -37,6 +37,9 @@ jobs:
       validate-command: |
         ruff check .
         pytest tests/ -v
+      # Exactly what ci.yml's "Check formatting" step runs, so a synced
+      # artifact cannot fail the very gate this repo enforces.
+      format-command: ruff format .
       generated-types-path: promptguard/generated/
       generated-types-file-label: promptguard/generated/api_types.py
       sibling-sdk-name: the Node SDK
