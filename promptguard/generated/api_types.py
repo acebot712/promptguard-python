@@ -13,6 +13,18 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 
+class ActiveGrant(TypedDict):
+    """A destination the agent may send to until ``expires_at`` (ISO 8601)."""
+
+    host: str
+    code: str
+    expires_at: str
+
+
+class ActiveGrantList(TypedDict):
+    grants: list[ActiveGrant]
+
+
 class AgentMemoryRequest(TypedDict, total=False):
     """Content being written to, or read back from, an agent's memory."""
 
@@ -64,6 +76,20 @@ class AgentRotateResponse(TypedDict):
     new_secret: str
     credential_prefix: str
     old_credential_revoked: bool
+
+
+class AgentSecurityHealthResponse(TypedDict):
+    status: str
+    validator_status: str
+    analyzer_status: str
+    blocked_tools_count: int
+
+
+class AgentSessionEndedResponse(TypedDict):
+    status: str
+    agent_id: str
+    session_id: str
+    deprecated: bool
 
 
 class AgentStats(TypedDict, total=False):
@@ -125,6 +151,11 @@ class AgentTraceResponse(TypedDict, total=False):
     event_id: str
 
 
+class ApiHealthResponse(TypedDict):
+    status: str
+    timestamp: str
+
+
 class ApiKeyResponse(TypedDict, total=False):
     id: str
     name: str
@@ -137,6 +168,26 @@ class ApiKeyResponse(TypedDict, total=False):
     last_used_at: str | Any
     expires_at: str | Any
     created_at: str
+
+
+class ApiKeyToggledResponse(TypedDict):
+    """What the toggle answers: whether the key authenticates from now on."""
+
+    success: bool
+    is_active: bool
+
+
+class ApiRootResponse(TypedDict):
+    name: str
+    description: str
+    status: str
+    documentation: str | Any
+
+
+class ApiVersionProbeResponse(TypedDict):
+    """A constant: the real version is behind ``/dashboard/version``."""
+
+    status: str
 
 
 class AuthErrorEnvelope(TypedDict):
@@ -182,6 +233,88 @@ class CreateToolRequest(TypedDict, total=False):
     requested_host: str
     requested_name: str | Any
     justification: str | Any
+
+
+class DeviceFinding(TypedDict):
+    """One category the Device's masker caught, and how many times."""
+
+    # The Engine's threat category, e.g. 'api_key_leak' or 'pii_leak'.
+    category: ThreatType
+    # How many values of this category the masker replaced.
+    count: int
+
+
+class DeviceIdentity(TypedDict):
+    """What the calling device is enrolled as."""
+
+    device_id: str
+    device_name: str
+    organization_id: str
+    organization_name: str | Any
+    identity_verified: bool
+    account_email: str | Any
+    account_name: str | Any
+    attribution_label: str | Any
+
+
+class DeviceRevokedResponse(TypedDict, total=False):
+    revoked: bool
+
+
+class DeviceShadowException(TypedDict):
+    """One exception request as the filing device sees it. Timestamps are ISO 8601."""
+
+    id: str
+    code: str
+    destination_host: str
+    policy_id: str | Any
+    threat: str | Any
+    reason_category: str | Any
+    justification: str | Any
+    requested_minutes: int
+    # pending | approved | denied | cancelled | expired
+    status: str
+    created_at: str | Any
+    decided_at: str | Any
+    expires_at: str | Any
+
+
+class DeviceShadowExceptionList(TypedDict):
+    exceptions: list[DeviceShadowException]
+
+
+class DeviceToolRequest(TypedDict):
+    """One "request a tool" row as the filing device sees it. Timestamps are ISO 8601."""
+
+    id: str
+    code: str
+    requested_host: str
+    requested_name: str | Any
+    justification: str | Any
+    # pending | approved | denied | cancelled
+    status: str
+    created_at: str | Any
+    decided_at: str | Any
+
+
+class DeviceToolRequestList(TypedDict):
+    tool_requests: list[DeviceToolRequest]
+
+
+class DeviceView(TypedDict):
+    """One device as an enrolled device may see it: another machine's label is withheld."""
+
+    id: str
+    name: str
+    platform: str
+    last_seen_at: str | Any
+    end_user_id: str | Any
+    # None where the label is withheld
+    identity_verified: bool | Any
+
+
+class DeviceViewList(TypedDict):
+    devices: list[DeviceView]
 
 
 class DivergenceItemOut(TypedDict):
@@ -293,6 +426,8 @@ class GuardRequest(TypedDict, total=False):
     retrieved_context: list[ContextDoc] | Any
     # Media attachments to scan for steganographic payloads, adversarial patches, and font injection. Optional.
     media: list[MediaPartSchema] | Any
+    # What the calling Device's own masker caught before sending, as `{category, count}` pairs — never the values. `category` is one of the threat types this API returns (e.g. `api_key_leak`, `pii_leak`) and appears at most once; `count` is a positive integer. Any other key is rejected with 422. Recorded on this request's event, attributed to the Device, and shown in the fleet views; it does not change the decision. Optional; clients that omit it are unaffected.
+    device_findings: list[DeviceFinding] | Any
 
 
 class GuardResponse(TypedDict, total=False):
@@ -316,6 +451,8 @@ class GuardResponse(TypedDict, total=False):
     latency_ms: float
     # Parts that reached us and produced nothing to scan. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block, unsupported_tool_call (an entry in `context.tool_calls` in none of the shapes we can read — `index` is its position in that list).
     unscanned: list[UnscannedAttachment]
+    # Unavailable checks: detectors this scan would have run but the deployment cannot, because their backing service (an ML inference endpoint, an LLM judge, a bundled model) is not configured. An `allow` with a non-empty `unavailable` is NOT 'every check passed' — these detectors never looked. A detector that ran and found nothing is not listed, and neither is one the project's plan or guardrail settings leave out.
+    unavailable: list[UnavailableCheck]
     # What this account is entitled to, at the instant this scan was answered. Null when the engine cannot say — an account with no subscription row, an admin key that bypasses the counter, or a row it could not read. Null is 'unknown', NOT 'unentitled': a client that reads it as a limit has invented a refusal the engine never made.
     entitlement: GuardEntitlement | Any
 
@@ -461,6 +598,47 @@ class ProjectResponse(TypedDict, total=False):
     created_at: str
 
 
+class ProxyAnthropicMessage(TypedDict):
+    """An Anthropic message."""
+
+    id: str
+    type: str
+    role: str
+    model: str
+    content: list[dict[str, Any]]
+
+
+class ProxyChatCompletion(TypedDict):
+    """An OpenAI chat completion."""
+
+    id: str
+    object: str
+    created: int
+    model: str
+    choices: list[dict[str, Any]]
+
+
+class ProxyModelList(TypedDict):
+    """OpenAI's model list."""
+
+    data: list[dict[str, Any]]
+
+
+class ProxyResponsesObject(TypedDict):
+    """An OpenAI Responses API response."""
+
+    id: str
+    object: str
+    model: str
+    output: list[dict[str, Any]]
+
+
+class ProxyTokenCount(TypedDict):
+    """Anthropic's token count for a messages body."""
+
+    input_tokens: int
+
+
 class QuotaErrorDetail(TypedDict, total=False):
     message: str
     # 'quota_exceeded' or 'spending_limit_exceeded'
@@ -589,6 +767,10 @@ class ThreatDetail(TypedDict, total=False):
     weighted_score: float | Any
 
 
+# Types of threats detected. Originals (block 1) cover prompt injection, PII, toxicity, exfiltration, fraud, and malicious tool/MCP invocation. Block 2 (added 2026-04) covers the AI Agent Traps framework (Franklin et al., Google DeepMind 2025) -- six categories of environment-driven attacks against autonomous agents. Cross-link to the per-category remediation pages under apps/docs/security/.
+ThreatType = Literal["prompt_injection", "pii_leak", "data_exfiltration", "toxicity", "api_key_leak", "system_prompt_leak", "policy_violation", "fraud_abuse", "malware", "secret_key_leak", "url_violation", "malicious_entity", "off_topic", "mcp_violation", "insecure_code", "gibberish", "language_violation", "multi_turn_escalation", "html_obfuscation", "syntactic_masking", "image_stego", "image_adversarial", "audio_stego", "font_injection", "dynamic_cloaking", "framing_bias", "critic_evasion", "persona_hyperstition", "rag_poisoning", "memory_poisoning", "few_shot_poisoning", "sub_agent_spawning", "compositional_fragment", "sybil_attack", "systemic_cascade", "tacit_collusion", "approval_fatigue"]
+
+
 class ToggleOnlyConfig(TypedDict, total=False):
     enabled: bool
 
@@ -597,6 +779,15 @@ class ToxicityConfig(TypedDict, total=False):
     enabled: bool
     threshold: float
     categories: list[str] | Any
+
+
+class UnavailableCheck(TypedDict):
+    """One detector the deployment cannot run, and why."""
+
+    # Stable detector name, e.g. 'jailbreak_judge'.
+    detector: str
+    # Why it cannot run: ml_inference_off (ML_INFERENCE_MODE=off), ml_inference_not_configured (no inference endpoint or token), ml_inference_mode_unsupported (a mode this detector does not implement), llm_judge_not_configured (no LLM judge endpoint), model_not_bundled (an in-process model artifact is missing).
+    reason: str
 
 
 class UnscannedAttachment(TypedDict):
@@ -610,12 +801,31 @@ class UnscannedAttachment(TypedDict):
     detail: str
 
 
+class UsageStatsResponse(TypedDict, total=False):
+    """The caller's request usage this month. ``reset_date`` is ISO 8601."""
+
+    has_subscription: bool
+    plan: str
+    status: str | Any
+    monthly_limit: int
+    used_this_month: int
+    remaining: int
+    usage_percentage: float
+    reset_date: str | Any
+
+
 class ValidationError(TypedDict, total=False):
     loc: list[str | int]
     msg: str
     type: str
     input: Any
     ctx: dict[str, Any]
+
+
+class WebhookAckResponse(TypedDict):
+    """What GitHub is told: a ping is answered, every other event accepted for later."""
+
+    status: Literal["pong", "accepted"]
 
 
 class developer__agent__router__ToolCallRequest(TypedDict, total=False):
