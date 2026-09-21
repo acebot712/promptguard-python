@@ -32,6 +32,15 @@ on:
         description: 'Command(s) that lint/typecheck/test the SDK against the freshly generated artifacts'
         type: string
         required: true
+      format-command:
+        description: >-
+          Command(s) that format the working tree the way this SDK's CI checks
+          it. Optional so a caller that has not set one keeps working, but both
+          callers set it: a generator writes whatever shape it likes, and an
+          unformatted artifact fails the PR's own lint job.
+        type: string
+        required: false
+        default: ''
       generated-types-path:
         description: 'Path (file or directory) the generated types land in, for git diff/add'
         type: string
@@ -102,6 +111,19 @@ jobs:
       # becomes a reviewable PR or a red build.
       - name: Adopt the contract
         run: ${{ inputs.adopt-contract-command }}
+
+      # BEFORE validation and before the diff below, so the commit carries
+      # formatted artifacts and the validation sees what CI will see.
+      #
+      # Without this the sync opened a PR whose own lint job failed every
+      # time: the generators emit correct but unformatted code, `ruff format
+      # --check .` and `biome check .` reject it, and in the Node SDK Biome
+      # runs before `tsc --noEmit` in the same job -- so the generated types
+      # were never type-checked at all. Fixed by hand on
+      # promptguard-node#52 / promptguard-python#41; this is the durable fix.
+      - name: Format the generated artifacts
+        if: inputs.format-command != ''
+        run: ${{ inputs.format-command }}
 
       # Runs AFTER both artifacts are updated, so a green run means the SDK
       # satisfies the new types and the new contract. If the contract moved
