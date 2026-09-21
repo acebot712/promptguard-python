@@ -42,8 +42,18 @@ jobs:
           cache: 'pip'
           cache-dependency-path: pyproject.toml
 
+      # Derived from pyproject's [dev] extra, never restated. These were two
+      # separate pins and they drifted: CI checked with 0.15.20 while
+      # sync-from-api.yml's `pip install -e ".[dev]"` formatted with 0.16.5.
+      # Harmless only for as long as the two agree on output -- the moment a
+      # ruff release changes formatting, the sync would start opening PRs that
+      # this very job rejects, which is the failure #42 just fixed arriving
+      # from the other side.
       - name: Install ruff
-        run: pip install ruff==0.15.20
+        run: |
+          pin=$(python -c "import tomllib; print(next(d for d in tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['dev'] if d.startswith('ruff')))")
+          echo "Installing $pin (pinned in pyproject [dev])"
+          pip install "$pin"
 
       - name: Check linting
         run: ruff check .
