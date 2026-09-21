@@ -768,7 +768,45 @@ class ThreatDetail(TypedDict, total=False):
 
 
 # Types of threats detected. Originals (block 1) cover prompt injection, PII, toxicity, exfiltration, fraud, and malicious tool/MCP invocation. Block 2 (added 2026-04) covers the AI Agent Traps framework (Franklin et al., Google DeepMind 2025) -- six categories of environment-driven attacks against autonomous agents. Cross-link to the per-category remediation pages under apps/docs/security/.
-ThreatType = Literal["prompt_injection", "pii_leak", "data_exfiltration", "toxicity", "api_key_leak", "system_prompt_leak", "policy_violation", "fraud_abuse", "malware", "secret_key_leak", "url_violation", "malicious_entity", "off_topic", "mcp_violation", "insecure_code", "gibberish", "language_violation", "multi_turn_escalation", "html_obfuscation", "syntactic_masking", "image_stego", "image_adversarial", "audio_stego", "font_injection", "dynamic_cloaking", "framing_bias", "critic_evasion", "persona_hyperstition", "rag_poisoning", "memory_poisoning", "few_shot_poisoning", "sub_agent_spawning", "compositional_fragment", "sybil_attack", "systemic_cascade", "tacit_collusion", "approval_fatigue"]
+ThreatType = Literal[
+    "prompt_injection",
+    "pii_leak",
+    "data_exfiltration",
+    "toxicity",
+    "api_key_leak",
+    "system_prompt_leak",
+    "policy_violation",
+    "fraud_abuse",
+    "malware",
+    "secret_key_leak",
+    "url_violation",
+    "malicious_entity",
+    "off_topic",
+    "mcp_violation",
+    "insecure_code",
+    "gibberish",
+    "language_violation",
+    "multi_turn_escalation",
+    "html_obfuscation",
+    "syntactic_masking",
+    "image_stego",
+    "image_adversarial",
+    "audio_stego",
+    "font_injection",
+    "dynamic_cloaking",
+    "framing_bias",
+    "critic_evasion",
+    "persona_hyperstition",
+    "rag_poisoning",
+    "memory_poisoning",
+    "few_shot_poisoning",
+    "sub_agent_spawning",
+    "compositional_fragment",
+    "sybil_attack",
+    "systemic_cascade",
+    "tacit_collusion",
+    "approval_fatigue",
+]
 
 
 class ToggleOnlyConfig(TypedDict, total=False):
