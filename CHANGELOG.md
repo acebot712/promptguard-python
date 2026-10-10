@@ -12,6 +12,39 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-10-10
+
+### Added
+
+Generated API types re-synced from the platform's OpenAPI spec (#41). Types
+only, additive only: nothing was removed or renamed, and no runtime behaviour
+changed. All of it lives in `promptguard.generated.api_types`.
+
+- **`GuardResponse.unavailable`**, a list of the new `UnavailableCheck`
+  (`detector`, `reason`): detectors the scan would have run but the deployment
+  cannot, because their backing service is not configured. An `allow` with a
+  non-empty `unavailable` does not mean every check passed.
+- **`GuardRequest.device_findings`**, a list of the new `DeviceFinding`
+  (`category`, `count`): what the calling Device's own masker caught before
+  sending. Optional; it does not change the decision.
+- **`ThreatType`**, the literal of threat categories the API returns.
+- Device-facing response types: `DeviceIdentity`, `DeviceView`,
+  `DeviceViewList`, `DeviceRevokedResponse`, `DeviceShadowException`,
+  `DeviceShadowExceptionList`, `DeviceToolRequest`, `DeviceToolRequestList`,
+  `ActiveGrant` and `ActiveGrantList`.
+- Proxy response types: `ProxyChatCompletion`, `ProxyResponsesObject`,
+  `ProxyModelList`, `ProxyAnthropicMessage` and `ProxyTokenCount`.
+- Other response types: `UsageStatsResponse`, `ApiKeyToggledResponse`,
+  `AgentSecurityHealthResponse`, `AgentSessionEndedResponse`,
+  `ApiHealthResponse`, `ApiRootResponse`, `ApiVersionProbeResponse` and
+  `WebhookAckResponse`.
+
+### Changed
+
+- Development only: ruff 0.16.9, CI reads its ruff pin from `pyproject.toml`,
+  and the type sync formats what it generates (#42, #43, #44). Nothing in the
+  installed package is affected.
+
 ## [2.2.1] — 2026-09-18
 
 ### Changed
