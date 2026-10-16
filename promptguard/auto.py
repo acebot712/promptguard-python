@@ -330,12 +330,34 @@ def instrumentation_report() -> dict:
         assert promptguard.instrumentation_report()["detected_unpatched"] == []
 
     which turns "we told you" into "you cannot ship without knowing".
+
+    ``middleware`` names the request-edge middleware guarding this process
+    (``"fastapi"`` for :class:`promptguard.integrations.fastapi.PromptGuardMiddleware`)
+    once the app has built its middleware stack, which Starlette does at
+    startup. It is not a patch, so it never appears in ``patched``.
     """
     return {
         "patched": patched_sdks(),
         "detected_unpatched": _detected_unpatched(),
+        "middleware": active_middleware(),
         "advice_url": _ADVICE_URL,
     }
+
+
+def active_middleware() -> list[str]:
+    """Names of the request-edge middleware alive in this process, sorted.
+
+    Independent of ``init()``: a middleware guards requests whether or not
+    auto-instrumentation is on. Read from ``sys.modules`` so that asking does
+    not import an integration nobody uses.
+    """
+    import sys
+
+    fastapi_integration = sys.modules.get("promptguard.integrations.fastapi")
+    if fastapi_integration is None:
+        return []
+    names: list[str] = fastapi_integration.active_middleware()
+    return names
 
 
 def _apply_patches() -> None:

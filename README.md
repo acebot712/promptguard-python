@@ -116,6 +116,11 @@ assert "openai" in promptguard.patched_sdks()  # the OpenAI SDK was patched
 `patched_sdks()` returns only the SDKs importable in the current environment
 (missing packages are silently skipped), and an empty list after `shutdown()`.
 
+`instrumentation_report()` gives the same facts as data: `patched`,
+`detected_unpatched` (installed provider libraries nothing hooked), `middleware`
+(request-edge middleware alive in this process, e.g. `["fastapi"]` — see
+[FastAPI / ASGI middleware](#fastapi--asgi-middleware)) and `advice_url`.
+
 ### Confirming protection is actually live
 
 `init()` returning without an exception does not mean anything is being scanned.
@@ -314,6 +319,87 @@ pipeline.run(input="user question")  # raises PromptGuardBlockedError on a block
 ```
 
 Requires the `llamaindex` extra: `pip install promptguard-sdk[llamaindex]`.
+
+### FastAPI / ASGI middleware
+
+Scans prompts at your app's edge, before your route runs. Use it when your app
+**accepts** prompts but calls the LLM somewhere auto-instrumentation does not
+patch (a sidecar, a queue worker, an unsupported SDK). With `init()` also on,
+the same text is scanned twice: once here, once at the provider call.
+
+```python
+from fastapi import FastAPI
+from promptguard.integrations.fastapi import PromptGuardMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    PromptGuardMiddleware,
+    api_key="pg_live_xxx",  # or PROMPTGUARD_API_KEY
+    paths=["/v1/chat"],  # omit to scan every path
+    exclude_paths=["/v1/chat/feedback"],
+)
+```
+
+It is a raw ASGI middleware, so it works with Starlette or any ASGI app, and it
+needs no extra install. The scan uses the async Guard client, so nothing blocks
+the event loop while the Guard API answers.
+
+**What is scanned.** `POST`, `PUT` and `PATCH` bodies (`methods=` to change) on
+the selected paths, with one `direction="input"` scan per request. These
+top-level JSON fields are read (`prompt_fields=` to replace the list):
+
+| Field | Read as |
+|-------|---------|
+| `messages`, `input` | a list of `{"role", "content"}` objects, each scanned with its own role; `content` may be a string or a list of parts, whose `text` parts are scanned (images and other parts are not) |
+| `system`, `instructions` | a string or text parts, scanned as `role="system"` |
+| `prompt`, `input`, `query`, `question`, `text`, `message`, `content` | a string or a list of strings, scanned as `role="user"` |
+
+Only top-level fields are read. A body that is not JSON is passed on unscanned,
+except `text/plain`, which is scanned whole as one user message. A body with
+none of these fields is passed on unscanned.
+
+**Paths.** `paths` and `exclude_paths` are prefixes matched on whole segments of
+the request path: `"/v1/chat"` covers `/v1/chat` and `/v1/chat/completions`, but
+not `/v1/chatter`. An exclusion wins over `paths`, and an excluded request's
+body is never read. `paths=None` (the default) scans every path.
+
+**The body.** It is buffered — including a chunked or streamed one — scanned
+whole, and replayed to your app byte for byte. The buffer is capped at
+`max_body_bytes` (10 MiB by default). A body over the cap, by `Content-Length`
+or while streaming, is answered `413` with code `request_too_large` and is
+neither scanned nor passed on: forwarding it unscanned would make padding a way
+past the guard.
+
+**Decisions.**
+
+| Decision | `mode="enforce"` (default) | `mode="monitor"` |
+|----------|---------------------------|------------------|
+| allow | your route runs | your route runs |
+| block | `403`, code `request_blocked`; your route never runs | logged, your route runs |
+| redact | `403`, code `redaction_required` — the middleware cannot rewrite an arbitrary body, so it refuses rather than forward unredacted content | logged, your route runs |
+
+A refusal uses the platform's error envelope:
+
+```json
+{
+  "error": {
+    "message": "Request blocked by security policy",
+    "type": "policy_violation",
+    "code": "request_blocked",
+    "event_id": "evt_abc123",
+    "details": {"threat_type": "prompt_injection", "confidence": 0.97}
+  }
+}
+```
+
+**When the Guard API is down.** The request goes through unscanned (fail-open,
+the SDK default) and a `WARNING` is logged on the `promptguard` logger with
+`extra={"promptguard_event": "guard_unavailable_fail_open", "path": ...}`, so
+you can alert on it. With `fail_open=False` the request is answered `503`, code
+`guard_unavailable`, instead.
+
+Once the app has started, `promptguard.instrumentation_report()["middleware"]`
+lists `"fastapi"`, and `promptguard.verify()` counts it as coverage.
 
 ## Standalone Guard API
 

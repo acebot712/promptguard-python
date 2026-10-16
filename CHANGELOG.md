@@ -12,6 +12,24 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Added
+
+- **FastAPI / ASGI middleware**, `promptguard.integrations.fastapi.PromptGuardMiddleware`
+  (acebot712/promptguard#945). It scans the prompt-shaped fields of a request
+  body (`messages`, `input`, `system`, `instructions`, `prompt`, `query`,
+  `question`, `text`, `message`, `content`; configurable) with the async Guard
+  client and answers a block with `403` before the route runs; otherwise the
+  body is replayed to the app unchanged, chunked bodies included. `paths` and
+  `exclude_paths` match whole path segments. Bodies over `max_body_bytes`
+  (10 MiB) get `413`. A Guard API outage fails open with a `WARNING` carrying
+  `promptguard_event="guard_unavailable_fail_open"`; `fail_open=False` answers
+  `503`. A redact decision is refused in enforce mode, since the body cannot be
+  rewritten safely. No new runtime dependency.
+- **`instrumentation_report()["middleware"]`**: the request-edge middleware
+  alive in the process (`["fastapi"]` once the app has started). This is cross-SDK
+  contract v1.7.0, which adds the key to the report; `verify()` counts a live
+  middleware as coverage.
+
 ## [2.3.0] — 2026-10-10
 
 ### Added

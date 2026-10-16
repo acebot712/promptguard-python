@@ -13,7 +13,7 @@ promptguard/
 ├── auto.py            # Auto-instrumentation (promptguard.init())
 ├── config.py          # Configuration and environment
 ├── patches/           # SDK monkey-patches (openai, anthropic, etc.)
-└── integrations/      # Framework integrations (langchain, crewai, etc.)
+└── integrations/      # Framework integrations (langchain, crewai, llamaindex, fastapi)
 
 tests/
 ├── test_client.py

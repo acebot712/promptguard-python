@@ -176,6 +176,14 @@ def verify(
         )
     elif report["patched"]:
         checks.append(_check("instrumentation", "pass", f"patched: {', '.join(report['patched'])}"))
+    elif report.get("middleware"):
+        checks.append(
+            _check(
+                "instrumentation",
+                "pass",
+                f"request-edge middleware: {', '.join(report['middleware'])}",
+            )
+        )
     else:
         # Nothing patched is only a problem for auto-instrumentation users;
         # proxy-mode callers are protected without a single patch, so this
