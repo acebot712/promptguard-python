@@ -12,6 +12,12 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Changed
+
+- `SECURITY.md` links to the published disclosure policy
+  (https://promptguard.co/security#reporting-a-vulnerability) instead of
+  keeping its own copy of the response times.
+
 ## [2.3.0] — 2026-10-10
 
 ### Added
