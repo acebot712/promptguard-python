@@ -43,6 +43,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.24.0",
+    # Already installed by httpx; declared because the ASGI middleware imports
+    # it directly (anyio.to_thread, to parse large bodies off the event loop).
+    "anyio>=3.0",
 ]
 
 [project.optional-dependencies]
