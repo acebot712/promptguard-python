@@ -67,6 +67,9 @@ dev = [
     "ruff==0.16.9",
     "mypy>=1.11.0",
     "pre-commit>=4.0.0",
+    # Test-only: the ASGI middleware imports neither, but its tests drive a real
+    # FastAPI app. httpx (a runtime dependency) supplies the ASGI transport.
+    "fastapi>=0.100.0",
 ]
 
 [project.urls]
