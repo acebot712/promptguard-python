@@ -18,6 +18,31 @@ survives three releases is a changelog nobody is maintaining.
   (https://promptguard.co/security#reporting-a-vulnerability) instead of
   keeping its own copy of the response times.
 
+### Added
+
+- **FastAPI / ASGI middleware**, `promptguard.integrations.fastapi.PromptGuardMiddleware`
+  (acebot712/promptguard#945). It scans the fields in `DEFAULT_PROMPT_FIELDS`
+  (configurable) of any request body on the selected paths with the async Guard
+  client, and answers a block with `403` before the route runs; otherwise the
+  body is replayed to the app unchanged, chunked and compressed bodies
+  included. It reads JSON (top-level arrays too), `text/plain` and form bodies
+  in their declared charset, and decompresses gzip/deflate; multipart is not
+  scanned. Content blocks and tool calls go to the Guard API as they are.
+  `paths` and `exclude_paths` match whole segments of the route path, with
+  `root_path` stripped, so mounted apps work. A body over `max_body_bytes`
+  (`DEFAULT_MAX_BODY_BYTES`, raw or decompressed) gets `413`. A Guard
+  `400`/`413`/`422` is refused in every mode; a transport error, timeout, `5xx`
+  or `429` fails open with a `WARNING` carrying
+  `promptguard_event="guard_unavailable_fail_open"` (`fail_open=False` answers
+  `503`), and a `401`/`403` does the same after one `ERROR`. A redact decision
+  is refused in enforce mode. `anyio`, already installed by `httpx`, is now
+  declared, because the middleware parses large bodies in a worker thread
+  with it.
+- **`instrumentation_report()["middleware"]`**: the request-edge middleware
+  wrapping an app in the process (`["fastapi"]` once the app has started).
+  This is cross-SDK contract v1.7.0, which adds the key to the report;
+  `verify()` counts a live middleware as coverage.
+
 ## [2.3.0] — 2026-10-10
 
 ### Added

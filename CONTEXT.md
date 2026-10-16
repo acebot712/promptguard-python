@@ -29,6 +29,14 @@ An adapter that carries scanning into a framework's own call path — LangChain,
 CrewAI, LlamaIndex.
 _Avoid_: plugin, middleware (that is one framework's word for it)
 
+**Request-edge middleware**:
+The framework integration that scans a request as it reaches the application,
+before any route runs, rather than at the LLM call — the ASGI/FastAPI
+`PromptGuardMiddleware`. Reported under `middleware` in the instrumentation
+report, never under `patched`.
+_Avoid_: firewall, gateway (both imply PromptGuard is in the request path to the
+provider, which it is not here)
+
 ### Scanning
 
 **Guard API**:

@@ -116,6 +116,11 @@ assert "openai" in promptguard.patched_sdks()  # the OpenAI SDK was patched
 `patched_sdks()` returns only the SDKs importable in the current environment
 (missing packages are silently skipped), and an empty list after `shutdown()`.
 
+`instrumentation_report()` gives the same facts as data: `patched`,
+`detected_unpatched` (installed provider libraries nothing hooked), `middleware`
+(request-edge middleware alive in this process, e.g. `["fastapi"]` — see
+[FastAPI / ASGI middleware](#fastapi--asgi-middleware)) and `advice_url`.
+
 ### Confirming protection is actually live
 
 `init()` returning without an exception does not mean anything is being scanned.
@@ -314,6 +319,116 @@ pipeline.run(input="user question")  # raises PromptGuardBlockedError on a block
 ```
 
 Requires the `llamaindex` extra: `pip install promptguard-sdk[llamaindex]`.
+
+### FastAPI / ASGI middleware
+
+Scans prompts at your app's edge, before your route runs. Use it when your app
+**accepts** prompts but calls the LLM somewhere auto-instrumentation does not
+patch (a sidecar, a queue worker, an unsupported SDK). With `init()` also on,
+the same text is scanned twice: once here, once at the provider call.
+
+```python
+from fastapi import FastAPI
+from promptguard.integrations.fastapi import PromptGuardMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    PromptGuardMiddleware,
+    api_key="pg_live_xxx",  # or PROMPTGUARD_API_KEY
+    paths=["/v1/chat"],  # omit to scan every path
+    exclude_paths=["/v1/chat/feedback"],
+)
+```
+
+It is a raw ASGI middleware, so it works with Starlette or any ASGI app, and it
+needs no extra install. The scan uses the async Guard client, and large bodies
+are parsed in a worker thread, so nothing holds the event loop. Every option is
+documented on `PromptGuardMiddleware` itself.
+
+**What is scanned.** Any request with a body on the selected paths, whatever
+its method (`methods=` to narrow it), with one `direction="input"` scan per
+request. The fields read are `DEFAULT_PROMPT_FIELDS` (`prompt_fields=` to
+replace them), each by the shape of its value:
+
+- a list of message objects is scanned message by message, each with its own
+  role, and a message's `tool_calls` go to the Guard API as tool calls;
+- content blocks (text, images, documents, tool use) are passed to the Guard
+  API as blocks, not flattened to text;
+- a string, or a list of strings, is one message: `role="system"` for the
+  fields in `SYSTEM_PROMPT_FIELDS`, `user` for the rest.
+
+Only top-level fields are read. A top-level JSON array is read item by item.
+
+The body is read by its `Content-Type`:
+
+| Body | Read as |
+|------|---------|
+| JSON (`application/json`, `*+json`, or no `Content-Type`), in its declared `charset` | the fields above |
+| `text/plain`, in its declared `charset` (default UTF-8) | one user message, whole |
+| `application/x-www-form-urlencoded` | the fields above, from the form |
+| `Content-Encoding: gzip` or `deflate` | decompressed first, then as above |
+| `multipart/form-data`, binary and other media | **not scanned** (a known gap: a prompt sent as a multipart field reaches your route unscanned) |
+
+**Paths.** `paths` and `exclude_paths` are prefixes matched on whole segments of
+the path your app's routes see — the request path less any `root_path`, the
+way Starlette routes it, so they work unchanged behind a proxy prefix or in a
+mounted app. `"/v1/chat"` covers `/v1/chat` and `/v1/chat/completions`, but not
+`/v1/chatter`. An exclusion wins over `paths`, and an excluded request's body is
+never read. `paths=None` (the default) scans every path; `paths=[]` is an error.
+
+**The body.** It is buffered — including a chunked or streamed one — scanned
+whole, and replayed to your app byte for byte (still compressed, if it was).
+The buffer is capped at `max_body_bytes` (default `DEFAULT_MAX_BODY_BYTES`),
+raw and decompressed, so a decompression bomb is caught. A body over the cap
+is answered `413` and is neither scanned nor passed on: forwarding it unscanned
+would make padding a way past the guard.
+
+**Decisions.**
+
+| Outcome | `mode="enforce"` (default) | `mode="monitor"` |
+|---------|---------------------------|------------------|
+| allow | your route runs | your route runs |
+| block | `403`, code `request_blocked`; your route never runs | logged, your route runs |
+| redact | `403`, code `redaction_required` | logged, your route runs |
+| body cannot be read: unknown `Content-Encoding` or `charset` | `415` | logged, your route runs |
+| body cannot be read: undecodable text, invalid JSON under a JSON `Content-Type`, JSON nested too deeply | `400` | logged, your route runs |
+| body over `max_body_bytes` | `413` | `413` |
+| Guard API says the request is too large (`413`, or a `422` size error) | `413`, code `request_too_large` | `413` |
+| Guard API rejects the request otherwise (`400`, `422`) | `400`, code `request_unscannable` | `400` |
+
+A redact is refused because the middleware cannot rewrite an arbitrary body
+safely. It is the rule ADR-0003 sets for a patched call auto-instrumentation
+cannot rewrite, applied here by analogy. A request the Guard API itself rejects
+is refused in every mode, because failing open on it would let a caller pad a
+prompt past the Guard's limits to get it through.
+
+A refusal uses the platform's error envelope:
+
+```json
+{
+  "error": {
+    "message": "Request blocked by security policy",
+    "type": "policy_violation",
+    "code": "request_blocked",
+    "event_id": "evt_abc123",
+    "details": {"threat_type": "prompt_injection", "confidence": 0.97}
+  }
+}
+```
+
+**When the Guard API cannot answer** — a network error, a timeout, a `5xx` or a
+`429` — the request goes through unscanned (fail-open, the SDK default) and a
+`WARNING` is logged on the `promptguard` logger with
+`extra={"promptguard_event": "guard_unavailable_fail_open", "path": ...}`, so
+you can alert on it. With `fail_open=False` the request is answered `503`, code
+`guard_unavailable`, instead. A `401` or `403` (a bad API key) follows the same
+setting, and is also logged once at `ERROR` with
+`promptguard_event="guard_auth_failed"`; `promptguard.verify()` catches it
+before you ship.
+
+Once the middleware is wrapping your app (from startup, or the first request
+when lifespan is off), `promptguard.instrumentation_report()["middleware"]`
+lists `"fastapi"`, and `promptguard.verify()` counts it as coverage.
 
 ## Standalone Guard API
 

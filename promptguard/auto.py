@@ -23,6 +23,7 @@ Modes:
 
 import logging
 import threading
+import weakref
 from typing import Any
 
 from promptguard._resolve import resolve_credentials, validate_mode
@@ -37,6 +38,9 @@ _scan_responses: bool = False
 # Guards the module-level globals during init()/shutdown() so concurrent or
 # repeat calls don't interleave a half-swapped client.
 _state_lock = threading.Lock()
+# Request-edge middleware currently wrapping an app, for instrumentation_report().
+# Weak, so a middleware whose app is gone drops out by itself.
+_live_middleware: "weakref.WeakSet[Any]" = weakref.WeakSet()
 
 
 def init(
@@ -330,12 +334,34 @@ def instrumentation_report() -> dict:
         assert promptguard.instrumentation_report()["detected_unpatched"] == []
 
     which turns "we told you" into "you cannot ship without knowing".
+
+    ``middleware`` names the request-edge middleware guarding this process
+    (``"fastapi"`` for :class:`promptguard.integrations.fastapi.PromptGuardMiddleware`)
+    once it is wrapping an app, which with Starlette is from startup (or the
+    first request when lifespan is off). It is not a patch, so it never
+    appears in ``patched``.
     """
     return {
         "patched": patched_sdks(),
         "detected_unpatched": _detected_unpatched(),
+        "middleware": active_middleware(),
         "advice_url": _ADVICE_URL,
     }
+
+
+def active_middleware() -> list[str]:
+    """Names of the request-edge middleware wrapping an app in this process, sorted.
+
+    Independent of ``init()``: a middleware guards requests whether or not
+    auto-instrumentation is on. A middleware registers itself the first time
+    it is called, which is when it is actually in front of an app.
+    """
+    return sorted({mw.name for mw in list(_live_middleware)})
+
+
+def _register_middleware(middleware: Any) -> None:
+    """Record ``middleware`` (anything with a ``name``) as wrapping an app."""
+    _live_middleware.add(middleware)
 
 
 def _apply_patches() -> None:

@@ -123,13 +123,13 @@ class TestTheReportIsMachineReadable:
     "we told you" into "you cannot ship without knowing".
     """
 
-    def test_the_report_has_the_three_things_a_caller_needs(self, monkeypatch):
+    def test_the_report_has_the_four_things_a_caller_needs(self, monkeypatch):
         monkeypatch.setattr(auto, "_known_patches", list)
         monkeypatch.setattr(auto, "_KNOWN_UNPATCHED", {})
 
         report = auto.instrumentation_report()
 
-        assert set(report) == {"patched", "detected_unpatched", "advice_url"}
+        assert set(report) == {"patched", "detected_unpatched", "middleware", "advice_url"}
         assert report["detected_unpatched"] == [], (
             "an empty list must be reachable, or `== []` is an assertion no "
             "customer could ever satisfy"
