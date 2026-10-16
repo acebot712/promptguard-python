@@ -15,6 +15,7 @@ against a broken middleware.
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -42,6 +43,7 @@ class FakeGuardApi:
         self.error: Exception | None = None
         self.gate: asyncio.Event | None = None
         self.scan_started: asyncio.Event | None = None
+        self.sync_calls = 0
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
@@ -69,7 +71,7 @@ class FakeGuardApi:
 
 
 @pytest.fixture
-def guard_api(monkeypatch: pytest.MonkeyPatch) -> FakeGuardApi:
+def guard_api(monkeypatch: pytest.MonkeyPatch):
     fake = FakeGuardApi()
     clients: dict[int, httpx.AsyncClient] = {}
 
@@ -81,12 +83,18 @@ def guard_api(monkeypatch: pytest.MonkeyPatch) -> FakeGuardApi:
             clients[id(loop)] = client
         return client
 
-    def _sync_scan_is_forbidden(self: GuardClient, *args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("the middleware made a synchronous Guard call on the event loop")
+    def _sync_scan(self: GuardClient, *args: Any, **kwargs: Any) -> Any:
+        # What a synchronous Guard call costs on the loop: the whole round
+        # trip, with every other request stalled behind it. Recorded and
+        # asserted at teardown because fail-open would swallow the raise.
+        fake.sync_calls += 1
+        time.sleep(1)
+        raise AssertionError("the middleware made a synchronous Guard call")
 
     monkeypatch.setattr(GuardClient, "_ensure_async_client", _ensure_async_client)
-    monkeypatch.setattr(GuardClient, "scan", _sync_scan_is_forbidden)
-    return fake
+    monkeypatch.setattr(GuardClient, "scan", _sync_scan)
+    yield fake
+    assert fake.sync_calls == 0, "the middleware made a synchronous Guard call on the event loop"
 
 
 def _make_app(**middleware_kwargs: Any) -> tuple[Any, dict[str, Any]]:
@@ -488,6 +496,15 @@ class TestPromptFields:
         assert sorted(guard_api.scanned_messages, key=json.dumps) == sorted(
             expected, key=json.dumps
         )
+
+    @pytest.mark.asyncio
+    async def test_an_odd_item_cannot_hide_the_messages_beside_it(self, guard_api):
+        payload = {"messages": [{"role": "user", "content": INJECTION}, {"role": "tool"}, 7]}
+        app, seen = _make_app()
+        async with _client(app) as client:
+            resp = await client.post("/chat", content=json.dumps(payload).encode())
+        assert resp.status_code == 403
+        assert seen["calls"] == 0
 
     @pytest.mark.asyncio
     async def test_prompt_fields_are_configurable(self, guard_api):
