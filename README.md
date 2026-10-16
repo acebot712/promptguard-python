@@ -225,12 +225,16 @@ llm = ChatOpenAI(model="gpt-5-nano", callbacks=[handler])
 
 # Or use globally with any chain
 chain.invoke({"input": "..."}, config={"callbacks": [handler]})
+
+# LangGraph graphs take the same config; a block raises PromptGuardBlockedError
+# out of graph.invoke / graph.ainvoke
+graph.invoke({"messages": [...]}, config={"callbacks": [handler]})
 ```
 
 The handler scans:
 - `on_llm_start` / `on_chat_model_start` - prompts before the LLM call
 - `on_llm_end` - responses after the LLM call
-- `on_tool_start` - tool inputs for injection attempts
+- `on_tool_start` / `on_tool_end` - tool inputs for injection attempts, and tool outputs
 - `on_chain_start/end` - tracks chain context
 
 The callback can only *observe* (block or warn). To scan **and redact** content
@@ -265,8 +269,8 @@ pg = PromptGuardGuardrail(api_key="pg_live_xxx")
 crew = Crew(
     agents=[...],
     tasks=[...],
-    before_kickoff=pg.before_kickoff,
-    after_kickoff=pg.after_kickoff,
+    before_kickoff_callbacks=[pg.before_kickoff],
+    after_kickoff_callbacks=[pg.after_kickoff],
 )
 
 crew.kickoff(inputs={"topic": "AI safety"})

@@ -25,6 +25,21 @@ from uuid import UUID
 from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
+# Subclass the real base class whenever LangChain is installed. Before every
+# event langchain-core reads ``ignore_llm`` / ``ignore_chat_model`` /
+# ``ignore_chain`` / ... and ``run_inline`` off the handler, then looks the event
+# method up by name -- including events this handler has no use for, such as
+# ``on_llm_new_token`` on every streamed chunk. A duck-typed class that misses
+# any one of them raises AttributeError, and because ``raise_error = True`` that
+# fails the user's LLM call (it did on every call, under langchain-core 1.6,
+# through promptguard-sdk 2.3.0). Inheriting picks up the no-op defaults for
+# all of them, including ones added later.
+# Without LangChain nothing can call the handler, so a plain base is enough.
+try:
+    from langchain_core.callbacks import BaseCallbackHandler as _BaseCallbackHandler
+except ImportError:  # pragma: no cover - LangChain is in the dev extras
+    _BaseCallbackHandler = object  # type: ignore[assignment,misc]
+
 logger = logging.getLogger("promptguard")
 
 # Keys we look inside when a chain hands the guard a ``dict`` input (the common
@@ -32,12 +47,14 @@ logger = logging.getLogger("promptguard")
 _DICT_TEXT_KEYS = ("input", "query", "question", "text", "content", "prompt")
 
 
-class PromptGuardCallbackHandler:
+class PromptGuardCallbackHandler(_BaseCallbackHandler):
     """LangChain callback handler that scans LLM I/O via the Guard API.
 
-    This class implements the LangChain ``BaseCallbackHandler`` interface
-    without importing LangChain at module level (so the SDK doesn't have
-    a hard dependency on it).
+    A ``langchain_core`` ``BaseCallbackHandler`` when LangChain is installed;
+    the SDK itself still has no hard dependency on it.
+
+    ``serialized`` is typed optional on every ``*_start`` callback: runnables,
+    and so every LangGraph graph and node, pass ``None`` there.
     """
 
     raise_error = True
@@ -86,7 +103,7 @@ class PromptGuardCallbackHandler:
 
     def on_llm_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         prompts: list[str],
         *,
         run_id: UUID | None = None,
@@ -96,7 +113,7 @@ class PromptGuardCallbackHandler:
         **kwargs: Any,
     ) -> None:
         messages = [{"role": "user", "content": p} for p in prompts]
-        model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
+        model = _model_name(serialized)
         context = self._build_context(run_id, parent_run_id, "llm", serialized, tags, metadata)
 
         decision = self._safe_scan(messages, "input", model, context)
@@ -104,7 +121,7 @@ class PromptGuardCallbackHandler:
 
     def on_chat_model_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         messages: list[list[Any]],
         *,
         run_id: UUID | None = None,
@@ -140,7 +157,7 @@ class PromptGuardCallbackHandler:
                         }
                     )
 
-        model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
+        model = _model_name(serialized)
         context = self._build_context(
             run_id, parent_run_id, "chat_model", serialized, tags, metadata
         )
@@ -182,7 +199,7 @@ class PromptGuardCallbackHandler:
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         inputs: dict[str, Any],
         *,
         run_id: UUID | None = None,
@@ -192,7 +209,11 @@ class PromptGuardCallbackHandler:
         **kwargs: Any,
     ) -> None:
         run_key = str(run_id) if run_id else "unknown"
-        chain_name = serialized.get("id", [""])[-1] if serialized.get("id") else "unknown"
+        # Runnables pass serialized=None and the chain's name as ``name=``.
+        serialized = serialized or {}
+        chain_name = (
+            serialized["id"][-1] if serialized.get("id") else kwargs.get("name") or "unknown"
+        )
         self._chain_context[run_key] = {
             "chain_name": chain_name,
             "parent_run_id": str(parent_run_id) if parent_run_id else None,
@@ -223,7 +244,7 @@ class PromptGuardCallbackHandler:
 
     def on_tool_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         input_str: str,
         *,
         run_id: UUID | None = None,
@@ -232,7 +253,8 @@ class PromptGuardCallbackHandler:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        tool_name = serialized.get("name") or serialized.get("id", [""])[-1]
+        serialized = serialized or {}
+        tool_name = serialized.get("name") or serialized.get("id", [""])[-1] or kwargs.get("name")
         messages = [{"role": "user", "content": input_str}]
         context = self._build_context(run_id, parent_run_id, "tool", serialized, tags, metadata)
         context["metadata"] = context.get("metadata", {})
@@ -371,6 +393,11 @@ class PromptGuardCallbackHandler:
         run_key = str(run_id) if run_id else None
         if run_key and run_key in self._chain_context:
             del self._chain_context[run_key]
+
+
+def _model_name(serialized: dict[str, Any] | None) -> str:
+    serialized = serialized or {}
+    return str(serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1])
 
 
 def _require_runnable_lambda() -> Any:
