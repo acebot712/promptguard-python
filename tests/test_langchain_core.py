@@ -144,6 +144,33 @@ class TestChain:
         assert first["context"]["chain_name"] == "RunnableSequence"
 
 
+class TestSession:
+    """A thread id reaches both scans of a call made through the framework."""
+
+    @patch.object(GuardClient, "scan", return_value=ALLOW)
+    def test_chain_thread_id_names_the_session(self, mock_scan):
+        chain = RunnableLambda(lambda text: text.upper()) | FakeListChatModel(
+            responses=["chain answer"]
+        )
+        config = {"callbacks": [_handler()], "metadata": {"thread_id": "conv-chain"}}
+
+        chain.invoke("hi", config=config)
+
+        assert _directions(mock_scan) == ["input", "output"]
+        sessions = [c.kwargs["context"].get("session_id") for c in mock_scan.call_args_list]
+        assert sessions == ["conv-chain", "conv-chain"]
+
+    @patch.object(GuardClient, "scan", return_value=ALLOW)
+    def test_graph_configurable_thread_id_names_the_session(self, mock_scan):
+        config = {"callbacks": [_handler()], "configurable": {"thread_id": "conv-graph"}}
+
+        _graph().invoke({"question": "hi"}, config=config)
+
+        assert _directions(mock_scan) == ["input", "output"]
+        sessions = [c.kwargs["context"].get("session_id") for c in mock_scan.call_args_list]
+        assert sessions == ["conv-graph", "conv-graph"]
+
+
 class TestTool:
     @patch.object(GuardClient, "scan", return_value=ALLOW)
     def test_tool_input_and_output_are_scanned(self, mock_scan):
