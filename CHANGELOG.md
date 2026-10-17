@@ -14,11 +14,32 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Changed
 
+- **Framework integrations send the framework's real conversation id as
+  `session_id`, or none** (acebot712/promptguard#956). The LangChain handler
+  used to send each call's run id, and the LlamaIndex handler each event's id,
+  so no two scans ever shared a session. The LangChain handler now sends the
+  call's `thread_id` (from LangGraph, or from `config["metadata"]`, where
+  `session_id` and `conversation_id` are read too) on the start scan and the
+  end scan alike; `PromptGuardRunnable` reads the same from its invoke config.
+  LlamaIndex events name no conversation, so its handler and
+  `PromptGuardQueryGuard` send one only when given `session_id=`. A call with
+  no conversation now sends no `session_id` at all. See "Conversations" in the
+  README for each integration.
+
 - `SECURITY.md` links to the published disclosure policy
   (https://promptguard.co/security#reporting-a-vulnerability) instead of
   keeping its own copy of the response times.
 
 ### Added
+
+- `session_id=` on `PromptGuardCallbackHandler` (LangChain and LlamaIndex),
+  `PromptGuardRunnable`, `PromptGuardQueryGuard` and CrewAI's
+  `PromptGuardGuardrail`, for a conversation the framework does not name
+  (acebot712/promptguard#956); the call's own id wins over it.
+- `session_id_header=` on the FastAPI / ASGI middleware: the request header
+  whose value is sent as `session_id`.
+- Auto-instrumentation sends an OpenAI Responses call's `conversation` as
+  `session_id`.
 
 - **FastAPI / ASGI middleware**, `promptguard.integrations.fastapi.PromptGuardMiddleware`
   (acebot712/promptguard#945). It scans the fields in `DEFAULT_PROMPT_FIELDS`

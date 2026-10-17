@@ -44,6 +44,7 @@ import anyio.to_thread
 from promptguard._resolve import resolve_credentials, validate_mode
 from promptguard.auto import _register_middleware
 from promptguard.guard import GuardApiError, GuardClient, GuardDecision
+from promptguard.integrations._session import as_session_id, with_session_id
 
 logger = logging.getLogger("promptguard")
 
@@ -443,6 +444,12 @@ class PromptGuardMiddleware:
         The largest body buffered for a scan, raw or decompressed; see
         :data:`DEFAULT_MAX_BODY_BYTES`. Over it the request is answered
         ``413`` and neither scanned nor passed to the app.
+    session_id_header:
+        The request header that carries the conversation id, e.g.
+        ``"X-Conversation-Id"``. Its value is sent as the scan's
+        ``session_id``, so the Guard API sees each request as a turn of that
+        Conversation. A request is not a conversation by itself, so with no
+        header named (the default), or a request that lacks it, none is sent.
 
     Bodies are read by ``Content-Type``: JSON (in its declared charset),
     ``text/plain`` (scanned whole, as one user message) and
@@ -475,6 +482,7 @@ class PromptGuardMiddleware:
         methods: Iterable[str] | None = None,
         prompt_fields: Sequence[str] = DEFAULT_PROMPT_FIELDS,
         max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+        session_id_header: str | None = None,
     ) -> None:
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
         validate_mode(mode)
@@ -495,6 +503,11 @@ class PromptGuardMiddleware:
         self._methods = None if methods is None else frozenset(m.upper() for m in methods)
         self._prompt_fields = tuple(prompt_fields)
         self._max_body_bytes = max_body_bytes
+        if session_id_header is not None and not session_id_header.strip():
+            raise ValueError("session_id_header must name a header, or be None")
+        self._session_id_header = (
+            session_id_header.strip().lower().encode("latin-1") if session_id_header else None
+        )
         self._wrapping = False
         self._auth_failure_logged = False
 
@@ -587,6 +600,8 @@ class PromptGuardMiddleware:
         context: dict[str, Any] = {"framework": NAME, "metadata": {"path": path}}
         if read.tool_calls:
             context["tool_calls"] = read.tool_calls
+        if self._session_id_header is not None:
+            with_session_id(context, as_session_id(_header(scope, self._session_id_header)))
         try:
             decision = await self._guard.scan_async(
                 # The Guard API takes content blocks as well as strings.

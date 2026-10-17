@@ -216,6 +216,34 @@ added.
 
 For deeper integration with richer context (chain names, tool calls, agent steps), use framework-specific callbacks alongside or instead of auto-instrumentation:
 
+### Conversations (`session_id`)
+
+Each scan can name the conversation it belongs to in `context.session_id`, so
+the Guard API can relate the turns of one conversation to each other. An
+integration sends the framework's **own** conversation id there, the same on
+every turn of one conversation, and sends **nothing** when the framework has
+none. It never invents one: a per-call run or event id would make every scan a
+conversation of its own.
+
+| Integration | Where the session id comes from |
+|---|---|
+| LangChain / LangGraph callback handler | The call's `thread_id`: LangGraph puts its checkpointer's `configurable["thread_id"]` in every callback's metadata. For a plain chain or model, set `config={"metadata": {"thread_id": ...}}` (`session_id` and `conversation_id` are read too, the keys LangSmith groups a thread by). |
+| LangChain `PromptGuardRunnable` | The invoke config's `configurable["thread_id"]`, or the same metadata keys. |
+| LlamaIndex handler and `PromptGuardQueryGuard` | LlamaIndex events name no conversation. Pass `session_id=` to the handler or guard that serves one chat. |
+| CrewAI `PromptGuardGuardrail` | CrewAI has no conversation id. Pass `session_id=`. `secure_tool` sends none: a tool run is not a turn. |
+| FastAPI / ASGI middleware | `session_id_header="X-Conversation-Id"` names the request header that carries it. |
+| Auto-instrumentation (`init()`) | The OpenAI Responses API's `conversation` (an id or `{"id": ...}`), which is also how the OpenAI Agents SDK's `conversation_id` reaches the API. `previous_response_id` changes every turn and is not used. Other provider APIs carry no conversation id. |
+
+Every handler, guard and guardrail that takes `session_id=` uses it only when
+the call names no conversation of its own; the call's id wins. An empty string
+is refused with a `ValueError`.
+
+```python
+handler = PromptGuardCallbackHandler()
+graph.invoke(inputs, config={"callbacks": [handler], "configurable": {"thread_id": "chat-42"}})
+# every scan in this turn, and in every later turn of thread chat-42, sends session_id="chat-42"
+```
+
 ### LangChain
 
 ```python

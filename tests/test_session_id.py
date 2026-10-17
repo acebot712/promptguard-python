@@ -132,7 +132,7 @@ class TestLangChainHandler:
         # The call's own thread is more specific than the handler's default.
         assert guard_api.session_ids == ["user-chat-7"] * 2 + ["thread-a"] * 2
 
-    def test_an_empty_explicit_session_id_is_refused(self):
+    def test_an_empty_explicit_session_id_is_refused(self, guard_api):
         with pytest.raises(ValueError, match="session_id"):
             self._handler(session_id="  ")
 
@@ -305,7 +305,7 @@ class TestLlamaIndex:
 
         assert guard_api.session_ids == [NO_SESSION, "chat-a"]
 
-    def test_an_empty_explicit_session_id_is_refused(self):
+    def test_an_empty_explicit_session_id_is_refused(self, guard_api):
         from promptguard.integrations.llamaindex import (
             PromptGuardCallbackHandler,
             PromptGuardQueryGuard,
