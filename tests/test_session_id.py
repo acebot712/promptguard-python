@@ -182,14 +182,14 @@ class TestLangChainHandler:
 
     def test_an_overlong_thread_id_is_dropped(self, guard_api):
         handler = self._handler()
-        _langchain_turn(handler, "hello", {"thread_id": "t" * 257})
         _langchain_turn(handler, "hello", {"thread_id": "t" * 256})
+        _langchain_turn(handler, "hello", {"thread_id": "t" * 255})
 
-        assert guard_api.session_ids == [NO_SESSION, NO_SESSION, "t" * 256, "t" * 256]
+        assert guard_api.session_ids == [NO_SESSION, NO_SESSION, "t" * 255, "t" * 255]
 
     def test_an_overlong_explicit_session_id_is_refused(self, guard_api):
-        with pytest.raises(ValueError, match="256"):
-            self._handler(session_id="s" * 257)
+        with pytest.raises(ValueError, match="255"):
+            self._handler(session_id="s" * 256)
 
 
 class TestLangChainRunnable:
@@ -484,7 +484,7 @@ class TestFastAPIMiddleware:
         assert guard_api.session_ids == [NO_SESSION]
 
     def test_an_overlong_header_value_is_dropped(self, guard_api):
-        self._post("X-Conversation-Id", [{"X-Conversation-Id": "c" * 257}])
+        self._post("X-Conversation-Id", [{"X-Conversation-Id": "c" * 256}])
 
         assert guard_api.session_ids == [NO_SESSION]
 
@@ -565,6 +565,6 @@ class TestOpenAIResponsesConversation:
         assert guard_api.session_ids == [NO_SESSION]
 
     def test_an_overlong_conversation_is_dropped(self, guard_api, fake_openai_responses):
-        fake_openai_responses().create(model="gpt-5-nano", input="hi", conversation="c" * 257)
+        fake_openai_responses().create(model="gpt-5-nano", input="hi", conversation="c" * 256)
 
         assert guard_api.session_ids == [NO_SESSION]
