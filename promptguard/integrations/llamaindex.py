@@ -14,12 +14,18 @@ Usage::
 
     from llama_index.core import Settings
     Settings.callback_manager = callback_manager
+
+LlamaIndex's callback events name no conversation -- each carries only its own
+event id -- so no session id is sent unless one is passed: give a chat
+engine's handler (or query guard) the ``session_id`` of the conversation it
+serves, and every scan it makes names that Conversation.
 """
 
 import logging
 from typing import Any
 
 from promptguard._resolve import resolve_credentials, validate_mode
+from promptguard._session import validate_session_id, with_session_id
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
@@ -45,6 +51,7 @@ class PromptGuardCallbackHandler:
         timeout: float = 10.0,
         event_starts_to_ignore: list[str] | None = None,
         event_ends_to_ignore: list[str] | None = None,
+        session_id: str | None = None,
     ):
         """Construct the handler.
 
@@ -52,6 +59,9 @@ class PromptGuardCallbackHandler:
         ----------
         mode:
             ``"enforce"`` to block policy violations, ``"monitor"`` to log only.
+        session_id:
+            The Conversation this handler's scans belong to. LlamaIndex events
+            name none, so without it no session id is sent.
         scan_responses:
             Defaults to ``True`` here — unlike ``promptguard.init()`` which
             defaults to ``False``. The callback already receives ``on_event_end``
@@ -77,6 +87,7 @@ class PromptGuardCallbackHandler:
         self._fail_open = fail_open
         self.event_starts_to_ignore = event_starts_to_ignore or []
         self.event_ends_to_ignore = event_ends_to_ignore or []
+        self._session_id = validate_session_id(session_id)
         self._event_context: dict[str, dict[str, Any]] = {}
 
     def on_event_start(
@@ -138,11 +149,7 @@ class PromptGuardCallbackHandler:
             return
 
         model = payload.get("model_name") or payload.get("model") or "unknown"
-        context = {
-            "framework": "llamaindex",
-            "session_id": event_id,
-            "metadata": {"event_type": _LLM_EVENT, "stage": "start"},
-        }
+        context = self._context(_LLM_EVENT, "start")
 
         decision = self._safe_scan(messages, "input", model, context)
         self._handle_decision(decision, event_id)
@@ -152,11 +159,7 @@ class PromptGuardCallbackHandler:
         if not text:
             return
 
-        context = {
-            "framework": "llamaindex",
-            "session_id": event_id,
-            "metadata": {"event_type": _LLM_EVENT, "stage": "end"},
-        }
+        context = self._context(_LLM_EVENT, "end")
 
         messages = [{"role": "assistant", "content": text}]
         decision = self._safe_scan(messages, "output", None, context)
@@ -168,11 +171,7 @@ class PromptGuardCallbackHandler:
             return
 
         messages = [{"role": "user", "content": query_str}]
-        context = {
-            "framework": "llamaindex",
-            "session_id": event_id,
-            "metadata": {"event_type": _QUERY_EVENT, "stage": "start"},
-        }
+        context = self._context(_QUERY_EVENT, "start")
 
         decision = self._safe_scan(messages, "input", None, context)
         self._handle_decision(decision, event_id)
@@ -187,16 +186,19 @@ class PromptGuardCallbackHandler:
             return
 
         messages = [{"role": "assistant", "content": text}]
-        context = {
-            "framework": "llamaindex",
-            "session_id": event_id,
-            "metadata": {"event_type": _QUERY_EVENT, "stage": "end"},
-        }
+        context = self._context(_QUERY_EVENT, "end")
 
         decision = self._safe_scan(messages, "output", None, context)
         self._handle_decision(decision, event_id)
 
     # -- Helpers -------------------------------------------------------------
+
+    def _context(self, event_type: str, stage: str) -> dict[str, Any]:
+        context = {
+            "framework": "llamaindex",
+            "metadata": {"event_type": event_type, "stage": stage},
+        }
+        return with_session_id(context, self._session_id)
 
     def _extract_messages_from_payload(self, payload: dict[str, Any]) -> list[dict[str, str]]:
         messages = []
@@ -357,6 +359,7 @@ class PromptGuardQueryGuard:
         mode: str = "enforce",
         fail_open: bool = True,
         timeout: float = 10.0,
+        session_id: str | None = None,
     ):
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
         validate_mode(mode)
@@ -367,15 +370,19 @@ class PromptGuardQueryGuard:
         )
         self._mode = mode
         self._fail_open = fail_open
+        self._session_id = validate_session_id(session_id)
 
     def guard_query(self, query_str: str) -> str:
         """Scan ``query_str``; return it (possibly redacted) or raise on a block."""
         text = str(query_str)
         messages = [{"role": "user", "content": text}]
-        context = {
-            "framework": "llamaindex",
-            "metadata": {"event_type": _QUERY_EVENT, "stage": "preprocess"},
-        }
+        context = with_session_id(
+            {
+                "framework": "llamaindex",
+                "metadata": {"event_type": _QUERY_EVENT, "stage": "preprocess"},
+            },
+            self._session_id,
+        )
         decision = self._safe_scan(messages, "input", None, context)
         if decision is None or decision.allowed:
             return text

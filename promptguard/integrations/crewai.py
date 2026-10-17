@@ -29,6 +29,7 @@ from collections.abc import Callable
 from typing import Any
 
 from promptguard._resolve import resolve_credentials, validate_mode
+from promptguard._session import validate_session_id, with_session_id
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
@@ -44,7 +45,10 @@ class PromptGuardGuardrail:
         mode: str = "enforce",
         fail_open: bool = True,
         timeout: float = 10.0,
+        session_id: str | None = None,
     ):
+        """``session_id`` names the Conversation the crew's scans belong to.
+        CrewAI has no conversation id of its own, so without one none is sent."""
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
         validate_mode(mode)
         self._guard = GuardClient(
@@ -54,6 +58,7 @@ class PromptGuardGuardrail:
         )
         self._mode = mode
         self._fail_open = fail_open
+        self._session_id = validate_session_id(session_id)
 
     def before_kickoff(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """Scan crew inputs before kickoff."""
@@ -129,7 +134,7 @@ class PromptGuardGuardrail:
             decision = self._guard.scan(
                 messages=messages,
                 direction=direction,
-                context=context,
+                context=with_session_id(context, self._session_id),
             )
         except Exception:
             if not self._fail_open:

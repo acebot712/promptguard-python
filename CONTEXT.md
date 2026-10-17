@@ -81,6 +81,13 @@ fallback that happens to exist.
 _Avoid_: fail-safe (ambiguous about which way it fails), degraded mode,
 bypass
 
+**Conversation**:
+The turns a framework treats as one exchange — a LangGraph thread, a chat
+engine's chat. A scan names it in `context.session_id` with the framework's own
+id, or names none; it is never a per-call run or event id.
+_Avoid_: session (the wire field's name, not the concept), thread (one
+framework's word for it)
+
 **Redaction**:
 A decision that rewrites the outgoing messages instead of stopping the call.
 When the call cannot be rewritten safely, enforce mode escalates it to a block.

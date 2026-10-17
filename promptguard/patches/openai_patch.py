@@ -23,6 +23,7 @@ import importlib.util
 import logging
 from typing import Any
 
+from promptguard._session import as_session_id
 from promptguard.patches._base import rewrite_message_object, wrap_async, wrap_sync
 
 logger = logging.getLogger("promptguard")
@@ -229,7 +230,25 @@ def _extract_responses_messages(
 ) -> tuple[list[dict[str, str]], str | None, dict[str, Any]]:
     model = kwargs.get("model")
     guard_messages = _responses_input_to_guard_format(kwargs)
-    return guard_messages, str(model) if model else None, {"framework": "openai"}
+    context: dict[str, Any] = {"framework": "openai"}
+    session_id = _responses_conversation_id(kwargs.get("conversation"))
+    if session_id is not None:
+        context["session_id"] = session_id
+    return guard_messages, str(model) if model else None, context
+
+
+def _responses_conversation_id(conversation: Any) -> str | None:
+    """The Conversation a Responses call belongs to, as its ``session_id``.
+
+    ``conversation`` is the call's own conversation, an id or ``{"id": ...}``
+    -- the same on every turn. ``previous_response_id`` is not read: it names
+    the previous response, so it changes every turn.
+    """
+    if isinstance(conversation, dict):
+        conversation = conversation.get("id")
+    if not isinstance(conversation, str):
+        return None
+    return as_session_id(conversation)
 
 
 def _apply_responses_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | None:

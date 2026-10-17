@@ -430,6 +430,36 @@ Once the middleware is wrapping your app (from startup, or the first request
 when lifespan is off), `promptguard.instrumentation_report()["middleware"]`
 lists `"fastapi"`, and `promptguard.verify()` counts it as coverage.
 
+### Conversations (`session_id`)
+
+Each scan can name the conversation it belongs to in `context.session_id`, so
+the Guard API can relate the turns of one conversation to each other. An
+integration sends the framework's **own** conversation id there, the same on
+every turn of one conversation, and sends **nothing** when the framework has
+none. It never invents one: a per-call run or event id would make every scan a
+conversation of its own.
+
+| Integration | Where the session id comes from |
+|---|---|
+| LangChain / LangGraph callback handler | The call's `thread_id`: LangGraph puts its checkpointer's `configurable["thread_id"]` in every callback's metadata. For a plain chain or model, set `config={"metadata": {"thread_id": ...}}` (`session_id` and `conversation_id` are read too, the keys LangSmith groups a thread by). |
+| LangChain `PromptGuardRunnable` | The invoke config's `configurable["thread_id"]`, or the same metadata keys. |
+| LlamaIndex handler and `PromptGuardQueryGuard` | LlamaIndex events name no conversation. Pass `session_id=` to the handler or guard that serves one chat. |
+| CrewAI `PromptGuardGuardrail` | CrewAI has no conversation id. Pass `session_id=`. `secure_tool` sends none: a tool run is not a turn. |
+| FastAPI / ASGI middleware | `session_id=lambda scope: ...` reads it from the authenticated session your auth middleware put in the scope; `session_id_header="X-Conversation-Id"` reads a header instead. Name only a header your own auth layer or a trusted proxy sets: a value the browser chooses lets a client pick which conversation its turns land in. |
+| Auto-instrumentation (`init()`) | The OpenAI Responses API's `conversation` (an id or `{"id": ...}`), which is also how the OpenAI Agents SDK's `conversation_id` reaches the API. `previous_response_id` changes every turn and is not used. Other provider APIs carry no conversation id. |
+
+Every handler, guard and guardrail that takes `session_id=` uses it only when
+the call names no conversation of its own; the call's id wins. An empty string,
+or one over 255 characters, is refused there with a `ValueError`. An id over
+255 characters that arrives with a call is dropped with a debug log, and the
+scan goes ahead without one.
+
+```python
+handler = PromptGuardCallbackHandler()
+graph.invoke(inputs, config={"callbacks": [handler], "configurable": {"thread_id": "chat-42"}})
+# every scan in this turn, and in every later turn of thread chat-42, sends session_id="chat-42"
+```
+
 ## Standalone Guard API
 
 For any language or framework, call the Guard API directly:
