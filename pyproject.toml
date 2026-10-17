@@ -71,8 +71,10 @@ dev = [
     "mypy>=1.11.0",
     "pre-commit>=4.0.0",
     # tests/test_langchain_core.py drives the callback handler through the real
-    # framework. Floors are the versions it was proven against; unpinned above
-    # so a breaking LangChain release turns CI red instead of reaching users.
+    # framework. These floors only keep dev installs current; they are not what
+    # users get. Users get the `all` extra's range, whose floor the
+    # `langchain-floor` CI job tests. Unpinned above, so a breaking LangChain
+    # release turns CI red instead of reaching users.
     "langchain-core>=1.6.0",
     "langgraph>=1.2.11",
     # Test-only: the ASGI middleware imports neither, but its tests drive a real

@@ -42,7 +42,9 @@ survives three releases is a changelog nobody is maintaining.
 - The `dev` extra now installs `langchain-core` and `langgraph`, and
   `tests/test_langchain_core.py` drives the handler through the real framework.
   The existing integration tests call the handler's methods directly, which is
-  why none of the above was caught.
+  why none of the above was caught. A new `langchain-floor` CI job runs
+  the LangChain tests against the `all` extra's floor, `langchain-core==0.1.0`,
+  on Python 3.10.
 
 - **Framework integrations send the framework's real conversation id as
   `session_id`, or none** (acebot712/promptguard#956). The LangChain handler

@@ -103,6 +103,38 @@ jobs:
       - name: Run tests with coverage
         run: pytest tests/ -v --cov --cov-report=term-missing --cov-fail-under=60
 
+  # The `test` job installs [dev], so it only ever sees the newest LangChain.
+  # Users may install anything the `all` extra allows, down to its floor, and
+  # the callback handler has to run there too. This installs exactly that
+  # floor (derived from pyproject, never restated) on the oldest Python we
+  # support, without LangGraph, and runs the LangChain tests against it.
+  langchain-floor:
+    name: LangChain extras floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      # tomllib is 3.11+; tomli is the same parser for 3.10.
+      - name: Install the langchain-core floor
+        run: |
+          pip install tomli
+          floor=$(python -c "import tomli; dep = next(d for d in tomli.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['all'] if d.startswith('langchain-core')); print(dep.replace('>=', '=='))")
+          echo "Installing $floor (the floor of pyproject's [all] extra)"
+          pip install -e . pytest pytest-asyncio "$floor"
+
+      - name: Run the LangChain tests
+        run: >-
+          pytest -v tests/test_langchain_core.py
+          tests/test_integrations.py::TestLangChainCallbackHandler
+          tests/test_integrations.py::TestLangChainRunnable
+
   validate-api-contract:
     name: Validate API Contract
     runs-on: ubuntu-latest
