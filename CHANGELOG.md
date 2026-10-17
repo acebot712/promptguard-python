@@ -12,7 +12,39 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PromptGuardCallbackHandler` (LangChain) failed every call it was attached
+  to.** langchain-core reads `ignore_chat_model`, `ignore_chain`, ... and
+  `run_inline` off a handler before each event, and the duck-typed handler
+  defined none of them, so the first callback raised `AttributeError` and
+  `raise_error = True` turned that into a failed LLM call. The handler now
+  subclasses langchain-core's `BaseCallbackHandler` whenever LangChain is
+  installed, which also covers events it does not implement (streaming's
+  `on_llm_new_token` failed the same way). Requires no change to user code.
+- **The handler crashed on chains and LangGraph graphs.** Runnables pass
+  `serialized=None` to `on_chain_start`; every `*_start` callback now accepts
+  it, or one whose `id` is empty, and chain context falls back to the run's
+  `name`. LangGraph works:
+  blocks raise `PromptGuardBlockedError` out of `graph.invoke` / `ainvoke`, and
+  tool inputs and outputs are scanned. On Python 3.10 an async graph reaches
+  the handler only if each node forwards its `config` to the model call; a
+  node that does not is not scanned, so the handler logs one warning per
+  process when it sees an async graph there ("Python 3.10 and async graphs" in
+  the README).
+- **The CrewAI example registered nothing.** It passed `before_kickoff=` /
+  `after_kickoff=`, which `Crew` silently ignores; the fields are the lists
+  `before_kickoff_callbacks` / `after_kickoff_callbacks` (module docstring and
+  README).
+
 ### Changed
+
+- The `dev` extra now installs `langchain-core` and `langgraph`, and
+  `tests/test_langchain_core.py` drives the handler through the real framework.
+  The existing integration tests call the handler's methods directly, which is
+  why none of the above was caught. A new `langchain-floor` CI job runs
+  the LangChain tests against the `all` extra's floor, `langchain-core==0.1.0`,
+  on Python 3.10.
 
 - **Framework integrations send the framework's real conversation id as
   `session_id`, or none** (acebot712/promptguard#956). The LangChain handler

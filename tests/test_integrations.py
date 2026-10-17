@@ -91,6 +91,21 @@ class TestLangChainCallbackHandler:
         call_args = mock_scan.call_args
         assert call_args.kwargs["direction"] == "input"
 
+    @pytest.mark.parametrize("serialized", [None, {}, {"id": []}])
+    @patch.object(GuardClient, "scan", return_value=GuardDecision({"decision": "allow"}))
+    def test_start_callbacks_accept_serialized_without_an_id(self, mock_scan, serialized):
+        handler = self._make_handler()
+
+        handler.on_llm_start(serialized=serialized, prompts=["hi"])
+        handler.on_chat_model_start(serialized=serialized, messages=[[]])
+        handler.on_chain_start(serialized=serialized, inputs={}, name="named_chain")
+        handler.on_tool_start(serialized=serialized, input_str="x", name="named_tool")
+
+        assert mock_scan.call_count == 3
+        assert mock_scan.call_args_list[-1].kwargs["context"]["metadata"]["tool_name"] == (
+            "named_tool"
+        )
+
     @patch.object(GuardClient, "scan")
     def test_on_llm_start_block_enforce(self, mock_scan):
         mock_scan.return_value = GuardDecision(

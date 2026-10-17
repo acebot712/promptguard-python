@@ -230,13 +230,31 @@ llm = ChatOpenAI(model="gpt-5-nano", callbacks=[handler])
 
 # Or use globally with any chain
 chain.invoke({"input": "..."}, config={"callbacks": [handler]})
+
+# LangGraph graphs take the same config; a block raises PromptGuardBlockedError
+# out of graph.invoke / graph.ainvoke
+graph.invoke({"messages": [...]}, config={"callbacks": [handler]})
 ```
 
 The handler scans:
 - `on_llm_start` / `on_chat_model_start` - prompts before the LLM call
 - `on_llm_end` - responses after the LLM call
-- `on_tool_start` - tool inputs for injection attempts
+- `on_tool_start` / `on_tool_end` - tool inputs for injection attempts, and tool outputs
 - `on_chain_start/end` - tracks chain context
+
+**Python 3.10 and async graphs.** Before Python 3.11, asyncio cannot carry a
+graph's callbacks into its nodes, so under `graph.ainvoke` / `astream` the
+handler sees only the model and tool calls that receive the node's `config`.
+A node that calls `model.ainvoke(state["messages"])` without it is **not
+scanned**, and nothing fails. Forward the config in every node, or run on 3.11+:
+
+```python
+async def call_model(state, config):
+    return {"messages": [await model.ainvoke(state["messages"], config=config)]}
+```
+
+The handler logs one warning per process when it sees an async graph on 3.10.
+Sync graphs (`graph.invoke`) are not affected.
 
 The callback can only *observe* (block or warn). To scan **and redact** content
 inline in an LCEL chain, use `PromptGuardRunnable`, which sits in the data flow
@@ -270,8 +288,8 @@ pg = PromptGuardGuardrail(api_key="pg_live_xxx")
 crew = Crew(
     agents=[...],
     tasks=[...],
-    before_kickoff=pg.before_kickoff,
-    after_kickoff=pg.after_kickoff,
+    before_kickoff_callbacks=[pg.before_kickoff],
+    after_kickoff_callbacks=[pg.after_kickoff],
 )
 
 crew.kickoff(inputs={"topic": "AI safety"})

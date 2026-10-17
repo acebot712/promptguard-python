@@ -25,6 +25,8 @@ the handler was given a ``session_id`` of its own.
 """
 
 import logging
+import sys
+import threading
 from typing import Any
 from uuid import UUID
 
@@ -37,19 +39,44 @@ from promptguard._session import (
 )
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
+# Subclass the real base class whenever LangChain is installed. Before every
+# event langchain-core reads ``ignore_llm`` / ``ignore_chat_model`` /
+# ``ignore_chain`` / ... and ``run_inline`` off the handler, then looks the event
+# method up by name -- including events this handler has no use for, such as
+# ``on_llm_new_token`` on every streamed chunk. A duck-typed class that misses
+# any one of them raises AttributeError, and because ``raise_error = True`` that
+# fails the user's LLM call (it did on every call, under langchain-core 1.6,
+# through promptguard-sdk 2.3.0). Inheriting picks up the no-op defaults for
+# all of them, including ones added later.
+# Without LangChain nothing can call the handler, so a plain base is enough.
+try:
+    from langchain_core.callbacks import BaseCallbackHandler as _BaseCallbackHandler
+except ImportError:  # pragma: no cover - LangChain is in the dev extras
+    _BaseCallbackHandler = object  # type: ignore[assignment,misc]
+
 logger = logging.getLogger("promptguard")
+
+# Before Python 3.11 ``asyncio.create_task`` takes no ``context``, so an async
+# LangGraph graph cannot pass its callbacks to a node's model call through
+# contextvars: a node that does not forward its ``config`` calls the model with
+# no handler attached, and nothing is scanned. The handler cannot scan a call it
+# never sees, so it warns once per process when it sees an async graph there.
+_ASYNC_CONTEXT_LOST = sys.version_info < (3, 11)
+_warned_async_graph_context = False
 
 # Keys we look inside when a chain hands the guard a ``dict`` input (the common
 # ``chain.invoke({"input": "..."})`` shape) so the raw user text can be scanned.
 _DICT_TEXT_KEYS = ("input", "query", "question", "text", "content", "prompt")
 
 
-class PromptGuardCallbackHandler:
+class PromptGuardCallbackHandler(_BaseCallbackHandler):
     """LangChain callback handler that scans LLM I/O via the Guard API.
 
-    This class implements the LangChain ``BaseCallbackHandler`` interface
-    without importing LangChain at module level (so the SDK doesn't have
-    a hard dependency on it).
+    A ``langchain_core`` ``BaseCallbackHandler`` when LangChain is installed;
+    the SDK itself still has no hard dependency on it.
+
+    ``serialized`` is typed optional on every ``*_start`` callback: runnables,
+    and so every LangGraph graph and node, pass ``None`` there.
     """
 
     raise_error = True
@@ -108,7 +135,7 @@ class PromptGuardCallbackHandler:
 
     def on_llm_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         prompts: list[str],
         *,
         run_id: UUID | None = None,
@@ -118,7 +145,7 @@ class PromptGuardCallbackHandler:
         **kwargs: Any,
     ) -> None:
         messages = [{"role": "user", "content": p} for p in prompts]
-        model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
+        model = _serialized_name(serialized, "kwargs", "model_name")
         session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
             run_id, parent_run_id, "llm", serialized, tags, metadata, session_id=session_id
@@ -130,7 +157,7 @@ class PromptGuardCallbackHandler:
 
     def on_chat_model_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         messages: list[list[Any]],
         *,
         run_id: UUID | None = None,
@@ -166,7 +193,7 @@ class PromptGuardCallbackHandler:
                         }
                     )
 
-        model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
+        model = _serialized_name(serialized, "kwargs", "model_name")
         session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
             run_id, parent_run_id, "chat_model", serialized, tags, metadata, session_id=session_id
@@ -211,7 +238,7 @@ class PromptGuardCallbackHandler:
 
     def on_chain_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         inputs: dict[str, Any],
         *,
         run_id: UUID | None = None,
@@ -221,7 +248,10 @@ class PromptGuardCallbackHandler:
         **kwargs: Any,
     ) -> None:
         run_key = str(run_id) if run_id else "unknown"
-        chain_name = serialized.get("id", [""])[-1] if serialized.get("id") else "unknown"
+        # Runnables pass serialized=None and the chain's name as ``name=``.
+        chain_name = _serialized_name(serialized) or kwargs.get("name") or "unknown"
+        if metadata and "langgraph_node" in metadata:
+            _warn_if_async_graph_loses_context()
         self._chain_context[run_key] = {
             "chain_name": chain_name,
             "parent_run_id": str(parent_run_id) if parent_run_id else None,
@@ -253,7 +283,7 @@ class PromptGuardCallbackHandler:
 
     def on_tool_start(
         self,
-        serialized: dict[str, Any],
+        serialized: dict[str, Any] | None,
         input_str: str,
         *,
         run_id: UUID | None = None,
@@ -262,7 +292,7 @@ class PromptGuardCallbackHandler:
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        tool_name = serialized.get("name") or serialized.get("id", [""])[-1]
+        tool_name = _serialized_name(serialized, "name") or kwargs.get("name")
         messages = [{"role": "user", "content": input_str}]
         session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
@@ -444,6 +474,46 @@ class PromptGuardCallbackHandler:
             del self._chain_context[run_key]
         if run_key:
             self._run_sessions.pop(run_key, None)
+
+
+def _warn_if_async_graph_loses_context() -> None:
+    """Warn once if this graph is async on a Python that drops its callbacks.
+
+    langchain-core runs a sync handler's callbacks for an async run in the
+    event loop's default executor, whose threads asyncio names ``asyncio_N``;
+    a sync run calls them on the caller's thread. Best effort: if that name
+    ever changes, the only loss is this warning.
+    """
+    global _warned_async_graph_context
+    if not _ASYNC_CONTEXT_LOST or _warned_async_graph_context:
+        return
+    if not threading.current_thread().name.startswith("asyncio"):
+        return
+    _warned_async_graph_context = True
+    logger.warning(
+        "PromptGuard: on Python 3.10 an async LangGraph graph passes callbacks "
+        "only to model and tool calls that receive the node's config. A node "
+        "that does not forward config to them is not scanned. Forward config "
+        "in each node, or run on Python 3.11+."
+    )
+
+
+def _serialized_name(serialized: dict[str, Any] | None, *path: str) -> str | None:
+    """The name a start callback's ``serialized`` gives its component.
+
+    The value at ``path`` (``"kwargs", "model_name"`` for a model, ``"name"``
+    for a tool) when it is set, else the class name that ends
+    ``serialized["id"]``, else ``None``. Runnables pass ``serialized=None``,
+    and nothing guarantees ``id`` is non-empty.
+    """
+    serialized = serialized or {}
+    value: Any = serialized if path else None
+    for key in path:
+        value = value.get(key) if isinstance(value, dict) else None
+    if value:
+        return str(value)
+    ids = serialized.get("id") or []
+    return str(ids[-1]) if ids else None
 
 
 def _require_runnable_lambda() -> Any:

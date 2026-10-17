@@ -11,9 +11,12 @@ Usage::
     crew = Crew(
         agents=[...],
         tasks=[...],
-        before_kickoff=pg.before_kickoff,
-        after_kickoff=pg.after_kickoff,
+        before_kickoff_callbacks=[pg.before_kickoff],
+        after_kickoff_callbacks=[pg.after_kickoff],
     )
+
+    # The fields are lists. ``Crew`` ignores unknown keyword arguments, so
+    # ``before_kickoff=...`` would be accepted and register nothing.
 
     # Or wrap individual tools:
     from promptguard.integrations.crewai import secure_tool
