@@ -24,10 +24,14 @@ survives three releases is a changelog nobody is maintaining.
   `on_llm_new_token` failed the same way). Requires no change to user code.
 - **The handler crashed on chains and LangGraph graphs.** Runnables pass
   `serialized=None` to `on_chain_start`; every `*_start` callback now accepts
-  it, and chain context falls back to the run's `name`. LangGraph works:
+  it, or one whose `id` is empty, and chain context falls back to the run's
+  `name`. LangGraph works:
   blocks raise `PromptGuardBlockedError` out of `graph.invoke` / `ainvoke`, and
   tool inputs and outputs are scanned. On Python 3.10 an async graph reaches
-  the handler only if each node forwards its `config` to the model call.
+  the handler only if each node forwards its `config` to the model call; a
+  node that does not is not scanned, so the handler logs one warning per
+  process when it sees an async graph there ("Python 3.10 and async graphs" in
+  the README).
 - **The CrewAI example registered nothing.** It passed `before_kickoff=` /
   `after_kickoff=`, which `Crew` silently ignores; the fields are the lists
   `before_kickoff_callbacks` / `after_kickoff_callbacks` (module docstring and

@@ -242,6 +242,20 @@ The handler scans:
 - `on_tool_start` / `on_tool_end` - tool inputs for injection attempts, and tool outputs
 - `on_chain_start/end` - tracks chain context
 
+**Python 3.10 and async graphs.** Before Python 3.11, asyncio cannot carry a
+graph's callbacks into its nodes, so under `graph.ainvoke` / `astream` the
+handler sees only the model and tool calls that receive the node's `config`.
+A node that calls `model.ainvoke(state["messages"])` without it is **not
+scanned**, and nothing fails. Forward the config in every node, or run on 3.11+:
+
+```python
+async def call_model(state, config):
+    return {"messages": [await model.ainvoke(state["messages"], config=config)]}
+```
+
+The handler logs one warning per process when it sees an async graph on 3.10.
+Sync graphs (`graph.invoke`) are not affected.
+
 The callback can only *observe* (block or warn). To scan **and redact** content
 inline in an LCEL chain, use `PromptGuardRunnable`, which sits in the data flow
 and returns the redacted value on a `redact` decision:
