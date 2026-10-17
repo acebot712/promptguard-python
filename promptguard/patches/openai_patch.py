@@ -23,6 +23,7 @@ import importlib.util
 import logging
 from typing import Any
 
+from promptguard._session import as_session_id
 from promptguard.patches._base import rewrite_message_object, wrap_async, wrap_sync
 
 logger = logging.getLogger("promptguard")
@@ -245,9 +246,9 @@ def _responses_conversation_id(conversation: Any) -> str | None:
     """
     if isinstance(conversation, dict):
         conversation = conversation.get("id")
-    if isinstance(conversation, str) and conversation.strip():
-        return conversation
-    return None
+    if not isinstance(conversation, str):
+        return None
+    return as_session_id(conversation)
 
 
 def _apply_responses_redaction(args, kwargs, redacted: list[dict[str, str]]) -> dict | None:

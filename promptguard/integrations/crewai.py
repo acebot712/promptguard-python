@@ -29,8 +29,8 @@ from collections.abc import Callable
 from typing import Any
 
 from promptguard._resolve import resolve_credentials, validate_mode
+from promptguard._session import validate_session_id, with_session_id
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
-from promptguard.integrations._session import validate_session_id, with_session_id
 
 logger = logging.getLogger("promptguard")
 

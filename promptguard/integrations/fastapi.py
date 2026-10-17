@@ -42,9 +42,9 @@ from urllib.parse import parse_qsl
 import anyio.to_thread
 
 from promptguard._resolve import resolve_credentials, validate_mode
+from promptguard._session import as_session_id, with_session_id
 from promptguard.auto import _register_middleware
 from promptguard.guard import GuardApiError, GuardClient, GuardDecision
-from promptguard.integrations._session import as_session_id, with_session_id
 
 logger = logging.getLogger("promptguard")
 
@@ -273,6 +273,11 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _header_reader(name: bytes) -> Callable[[Scope], str | None]:
+    """A ``session_id`` function that reads one request header."""
+    return lambda scope: _header(scope, name)
+
+
 def _media_type(header: str | None) -> tuple[str, str | None]:
     """``(media type, charset)`` from a ``Content-Type`` header."""
     if not header:
@@ -444,12 +449,23 @@ class PromptGuardMiddleware:
         The largest body buffered for a scan, raw or decompressed; see
         :data:`DEFAULT_MAX_BODY_BYTES`. Over it the request is answered
         ``413`` and neither scanned nor passed to the app.
+    session_id:
+        A function of the ASGI ``scope`` returning the Conversation the request
+        is a turn of, or ``None``. Read it from the authenticated session your
+        auth middleware put in the scope (``scope["user"]``,
+        ``scope["session"]``, ``scope["state"]``), not from anything the
+        client controls. A function that raises is logged and the request is
+        scanned without a session id.
     session_id_header:
-        The request header that carries the conversation id, e.g.
-        ``"X-Conversation-Id"``. Its value is sent as the scan's
-        ``session_id``, so the Guard API sees each request as a turn of that
-        Conversation. A request is not a conversation by itself, so with no
-        header named (the default), or a request that lacks it, none is sent.
+        Shorthand for a ``session_id`` that reads one request header, e.g.
+        ``"X-Conversation-Id"``. Name only a header your own auth layer or a
+        trusted proxy sets and strips from client requests: a value a browser
+        can choose lets a client pick which Conversation its turns land in.
+        Not both at once.
+
+    A request is not a conversation by itself, so with neither (the default),
+    or when they name none, no session id is sent. An id over 256 characters
+    is dropped.
 
     Bodies are read by ``Content-Type``: JSON (in its declared charset),
     ``text/plain`` (scanned whole, as one user message) and
@@ -482,6 +498,7 @@ class PromptGuardMiddleware:
         methods: Iterable[str] | None = None,
         prompt_fields: Sequence[str] = DEFAULT_PROMPT_FIELDS,
         max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+        session_id: Callable[[Scope], str | None] | None = None,
         session_id_header: str | None = None,
     ) -> None:
         resolved_key, resolved_url = resolve_credentials(api_key, base_url)
@@ -505,9 +522,11 @@ class PromptGuardMiddleware:
         self._max_body_bytes = max_body_bytes
         if session_id_header is not None and not session_id_header.strip():
             raise ValueError("session_id_header must name a header, or be None")
-        self._session_id_header = (
-            session_id_header.strip().lower().encode("latin-1") if session_id_header else None
-        )
+        if session_id is not None and session_id_header is not None:
+            raise ValueError("pass session_id or session_id_header, not both")
+        if session_id_header is not None:
+            session_id = _header_reader(session_id_header.strip().lower().encode("latin-1"))
+        self._session_id = session_id
         self._wrapping = False
         self._auth_failure_logged = False
 
@@ -568,6 +587,21 @@ class PromptGuardMiddleware:
 
         await self.app(scope, replay, send)
 
+    @staticmethod
+    def _read_session_id(
+        read: Callable[[Scope], str | None], scope: Scope, path: str
+    ) -> str | None:
+        try:
+            return as_session_id(read(scope))
+        except Exception:
+            logger.warning(
+                "PromptGuard: session_id raised; scanning %s without a session id",
+                path,
+                exc_info=True,
+                extra={"promptguard_event": "session_id_failed", "path": path},
+            )
+            return None
+
     async def _admit(self, scope: Scope, body: bytes, send: Send) -> bool:
         """Read and scan ``body``; answer the request and return ``False`` to refuse it."""
         path = _route_path(scope)
@@ -600,8 +634,8 @@ class PromptGuardMiddleware:
         context: dict[str, Any] = {"framework": NAME, "metadata": {"path": path}}
         if read.tool_calls:
             context["tool_calls"] = read.tool_calls
-        if self._session_id_header is not None:
-            with_session_id(context, as_session_id(_header(scope, self._session_id_header)))
+        if self._session_id is not None:
+            with_session_id(context, self._read_session_id(self._session_id, scope, path))
         try:
             decision = await self._guard.scan_async(
                 # The Guard API takes content blocks as well as strings.

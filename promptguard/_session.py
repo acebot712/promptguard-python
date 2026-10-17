@@ -7,7 +7,14 @@ different one for another -- or nothing at all. A per-call run or event id
 would make every scan a conversation of its own.
 """
 
+import logging
 from typing import Any
+
+logger = logging.getLogger("promptguard")
+
+# The longest session id sent. Longer is not a conversation id but a payload,
+# and the Guard API refuses it, so it is dropped before the scan.
+MAX_SESSION_ID_CHARS = 256
 
 # The metadata keys a LangChain call carries its conversation id under, in the
 # order they are read. LangGraph copies the checkpointer's ``thread_id`` into
@@ -21,15 +28,24 @@ def as_session_id(value: Any) -> str | None:
 
     A non-empty string is used as it is, and an integer (LangGraph accepts an
     int ``thread_id``) as its decimal form. Anything else -- ``None``, a bool,
-    an empty string, an object -- names no conversation.
+    an empty string, an object -- names no conversation. Nor does an id over
+    :data:`MAX_SESSION_ID_CHARS`: it is dropped with a debug log and the scan
+    goes ahead without one, never failing the call (ADR-0002).
     """
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return str(value)
-    if isinstance(value, str) and value.strip():
-        return value
-    return None
+        value = str(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    if len(value) > MAX_SESSION_ID_CHARS:
+        logger.debug(
+            "session id of %d characters is over %d; scanning without one",
+            len(value),
+            MAX_SESSION_ID_CHARS,
+        )
+        return None
+    return value
 
 
 def session_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
@@ -49,6 +65,9 @@ def validate_session_id(session_id: str | None) -> str | None:
         return None
     if not isinstance(session_id, str) or not session_id.strip():
         raise ValueError(f"session_id must be a non-empty string, got {session_id!r}")
+    if len(session_id) > MAX_SESSION_ID_CHARS:
+        # Configuration, not a request: refused when the integration is built.
+        raise ValueError(f"session_id must be at most {MAX_SESSION_ID_CHARS} characters")
     return session_id
 
 

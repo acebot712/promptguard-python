@@ -36,8 +36,12 @@ survives three releases is a changelog nobody is maintaining.
   `PromptGuardRunnable`, `PromptGuardQueryGuard` and CrewAI's
   `PromptGuardGuardrail`, for a conversation the framework does not name
   (acebot712/promptguard#956); the call's own id wins over it.
-- `session_id_header=` on the FastAPI / ASGI middleware: the request header
-  whose value is sent as `session_id`.
+- `session_id=` (a function of the ASGI scope) and `session_id_header=` on
+  the FastAPI / ASGI middleware, to send the request's conversation as
+  `session_id`. Read it from the authenticated session, or from a header only
+  your own auth layer or a trusted proxy sets, never from browser input.
+- A session id over 256 characters is dropped with a debug log and the scan
+  goes ahead without one; passed to a constructor, it is a `ValueError`.
 - Auto-instrumentation sends an OpenAI Responses call's `conversation` as
   `session_id`.
 

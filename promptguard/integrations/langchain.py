@@ -29,13 +29,13 @@ from typing import Any
 from uuid import UUID
 
 from promptguard._resolve import resolve_credentials, validate_mode
-from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
-from promptguard.integrations._session import (
+from promptguard._session import (
     as_session_id,
     session_id_from_metadata,
     validate_session_id,
     with_session_id,
 )
+from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 logger = logging.getLogger("promptguard")
 
@@ -119,10 +119,14 @@ class PromptGuardCallbackHandler:
     ) -> None:
         messages = [{"role": "user", "content": p} for p in prompts]
         model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
-        context = self._build_context(run_id, parent_run_id, "llm", serialized, tags, metadata)
+        session_id = self._session_for(run_id, parent_run_id, metadata)
+        context = self._build_context(
+            run_id, parent_run_id, "llm", serialized, tags, metadata, session_id=session_id
+        )
 
         decision = self._safe_scan(messages, "input", model, context)
         self._handle_decision(decision, run_id)
+        self._remember_run(run_id, session_id)
 
     def on_chat_model_start(
         self,
@@ -163,12 +167,14 @@ class PromptGuardCallbackHandler:
                     )
 
         model = serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1]
+        session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
-            run_id, parent_run_id, "chat_model", serialized, tags, metadata
+            run_id, parent_run_id, "chat_model", serialized, tags, metadata, session_id=session_id
         )
 
         decision = self._safe_scan(guard_messages, "input", model, context)
         self._handle_decision(decision, run_id)
+        self._remember_run(run_id, session_id)
 
     def on_llm_end(
         self,
@@ -258,12 +264,16 @@ class PromptGuardCallbackHandler:
     ) -> None:
         tool_name = serialized.get("name") or serialized.get("id", [""])[-1]
         messages = [{"role": "user", "content": input_str}]
-        context = self._build_context(run_id, parent_run_id, "tool", serialized, tags, metadata)
+        session_id = self._session_for(run_id, parent_run_id, metadata)
+        context = self._build_context(
+            run_id, parent_run_id, "tool", serialized, tags, metadata, session_id=session_id
+        )
         context["metadata"] = context.get("metadata", {})
         context["metadata"]["tool_name"] = tool_name
 
         decision = self._safe_scan(messages, "input", "tool", context)
         self._handle_decision(decision, run_id)
+        self._remember_run(run_id, session_id)
 
     def on_tool_end(
         self,
@@ -360,26 +370,10 @@ class PromptGuardCallbackHandler:
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         *,
-        session_id: str | None = None,
+        session_id: str | None,
     ) -> dict[str, Any]:
-        """The scan's context. A start callback passes its ``metadata``, and the
-        session id is read from it and remembered for the run's end; an end
-        callback passes the ``session_id`` its start remembered."""
-        run_key = str(run_id) if run_id else "unknown"
-        chain_info = self._chain_context.get(run_key, {})
-        parent_key = str(parent_run_id) if parent_run_id else None
-        if parent_key and parent_key in self._chain_context:
-            chain_info = self._chain_context[parent_key]
-
-        if session_id is None:
-            session_id = (
-                session_id_from_metadata(metadata)
-                or chain_info.get("session_id")
-                or self._session_id
-            )
-            if run_id is not None:
-                self._run_sessions[run_key] = session_id
-
+        """The scan's context, naming ``session_id`` when there is one."""
+        chain_info = self._chain_info(run_id, parent_run_id)
         context = {
             "framework": "langchain",
             "chain_name": chain_info.get("chain_name"),
@@ -406,10 +400,42 @@ class PromptGuardCallbackHandler:
             logger.debug("Failed to extract response text", exc_info=True)
         return None
 
+    def _chain_info(self, run_id: UUID | None, parent_run_id: UUID | None) -> dict[str, Any]:
+        parent_key = str(parent_run_id) if parent_run_id else None
+        if parent_key and parent_key in self._chain_context:
+            return self._chain_context[parent_key]
+        return self._chain_context.get(str(run_id) if run_id else "unknown", {})
+
+    def _session_for(
+        self,
+        run_id: UUID | None,
+        parent_run_id: UUID | None,
+        metadata: dict[str, Any] | None,
+    ) -> str | None:
+        """The Conversation a starting run belongs to: its own metadata's,
+        its chain's, or the handler's default."""
+        return (
+            session_id_from_metadata(metadata)
+            or self._chain_info(run_id, parent_run_id).get("session_id")
+            or self._session_id
+        )
+
+    def _remember_run(self, run_id: UUID | None, session_id: str | None) -> None:
+        """Keep a run's session id for its end scan.
+
+        Called only once the start scan has returned: langchain-core calls a
+        start callback outside the block whose error path calls
+        ``on_llm_error``, so a start that raises gets no end or error callback
+        and anything stored before it would never be removed. Nothing is
+        stored when the end scan will not run, or would name no session.
+        """
+        if run_id is not None and session_id is not None and self._scan_responses:
+            self._run_sessions[str(run_id)] = session_id
+
     def _end_run(self, run_id: UUID | None) -> str | None:
         """Forget a finished LLM or tool run; return the session id it started with."""
         if run_id is None:
-            return self._session_id
+            return None
         return self._run_sessions.pop(str(run_id), None)
 
     def _cleanup_run(self, run_id: UUID | None) -> None:
