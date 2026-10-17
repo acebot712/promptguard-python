@@ -25,6 +25,8 @@ the handler was given a ``session_id`` of its own.
 """
 
 import logging
+import sys
+import threading
 from typing import Any
 from uuid import UUID
 
@@ -53,6 +55,14 @@ except ImportError:  # pragma: no cover - LangChain is in the dev extras
     _BaseCallbackHandler = object  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("promptguard")
+
+# Before Python 3.11 ``asyncio.create_task`` takes no ``context``, so an async
+# LangGraph graph cannot pass its callbacks to a node's model call through
+# contextvars: a node that does not forward its ``config`` calls the model with
+# no handler attached, and nothing is scanned. The handler cannot scan a call it
+# never sees, so it warns once per process when it sees an async graph there.
+_ASYNC_CONTEXT_LOST = sys.version_info < (3, 11)
+_warned_async_graph_context = False
 
 # Keys we look inside when a chain hands the guard a ``dict`` input (the common
 # ``chain.invoke({"input": "..."})`` shape) so the raw user text can be scanned.
@@ -240,6 +250,8 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         run_key = str(run_id) if run_id else "unknown"
         # Runnables pass serialized=None and the chain's name as ``name=``.
         chain_name = _serialized_name(serialized) or kwargs.get("name") or "unknown"
+        if metadata and "langgraph_node" in metadata:
+            _warn_if_async_graph_loses_context()
         self._chain_context[run_key] = {
             "chain_name": chain_name,
             "parent_run_id": str(parent_run_id) if parent_run_id else None,
@@ -462,6 +474,28 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
             del self._chain_context[run_key]
         if run_key:
             self._run_sessions.pop(run_key, None)
+
+
+def _warn_if_async_graph_loses_context() -> None:
+    """Warn once if this graph is async on a Python that drops its callbacks.
+
+    langchain-core runs a sync handler's callbacks for an async run in the
+    event loop's default executor, whose threads asyncio names ``asyncio_N``;
+    a sync run calls them on the caller's thread. Best effort: if that name
+    ever changes, the only loss is this warning.
+    """
+    global _warned_async_graph_context
+    if not _ASYNC_CONTEXT_LOST or _warned_async_graph_context:
+        return
+    if not threading.current_thread().name.startswith("asyncio"):
+        return
+    _warned_async_graph_context = True
+    logger.warning(
+        "PromptGuard: on Python 3.10 an async LangGraph graph passes callbacks "
+        "only to model and tool calls that receive the node's config. A node "
+        "that does not forward config to them is not scanned. Forward config "
+        "in each node, or run on Python 3.11+."
+    )
 
 
 def _serialized_name(serialized: dict[str, Any] | None, *path: str) -> str | None:
