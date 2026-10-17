@@ -464,7 +464,7 @@ class PromptGuardMiddleware:
         Not both at once.
 
     A request is not a conversation by itself, so with neither (the default),
-    or when they name none, no session id is sent. An id over 256 characters
+    or when they name none, no session id is sent. An id over 255 characters
     is dropped.
 
     Bodies are read by ``Content-Type``: JSON (in its declared charset),

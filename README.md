@@ -450,8 +450,8 @@ conversation of its own.
 
 Every handler, guard and guardrail that takes `session_id=` uses it only when
 the call names no conversation of its own; the call's id wins. An empty string,
-or one over 256 characters, is refused there with a `ValueError`. An id over
-256 characters that arrives with a call is dropped with a debug log, and the
+or one over 255 characters, is refused there with a `ValueError`. An id over
+255 characters that arrives with a call is dropped with a debug log, and the
 scan goes ahead without one.
 
 ```python

@@ -12,9 +12,9 @@ from typing import Any
 
 logger = logging.getLogger("promptguard")
 
-# The longest session id sent. Longer is not a conversation id but a payload,
-# and the Guard API refuses it, so it is dropped before the scan.
-MAX_SESSION_ID_CHARS = 256
+# The longest session id sent: the Guard API refuses a longer one, matching the
+# column that stores it, so it is dropped before the scan.
+MAX_SESSION_ID_CHARS = 255
 
 # The metadata keys a LangChain call carries its conversation id under, in the
 # order they are read. LangGraph copies the checkpointer's ``thread_id`` into

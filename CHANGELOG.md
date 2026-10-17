@@ -40,7 +40,7 @@ survives three releases is a changelog nobody is maintaining.
   the FastAPI / ASGI middleware, to send the request's conversation as
   `session_id`. Read it from the authenticated session, or from a header only
   your own auth layer or a trusted proxy sets, never from browser input.
-- A session id over 256 characters is dropped with a debug log and the scan
+- A session id over 255 characters is dropped with a debug log and the scan
   goes ahead without one; passed to a constructor, it is a `ValueError`.
 - Auto-instrumentation sends an OpenAI Responses call's `conversation` as
   `session_id`.
