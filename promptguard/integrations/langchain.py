@@ -135,7 +135,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         messages = [{"role": "user", "content": p} for p in prompts]
-        model = _model_name(serialized)
+        model = _serialized_name(serialized, "kwargs", "model_name")
         session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
             run_id, parent_run_id, "llm", serialized, tags, metadata, session_id=session_id
@@ -183,7 +183,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
                         }
                     )
 
-        model = _model_name(serialized)
+        model = _serialized_name(serialized, "kwargs", "model_name")
         session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
             run_id, parent_run_id, "chat_model", serialized, tags, metadata, session_id=session_id
@@ -239,10 +239,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
     ) -> None:
         run_key = str(run_id) if run_id else "unknown"
         # Runnables pass serialized=None and the chain's name as ``name=``.
-        serialized = serialized or {}
-        chain_name = (
-            serialized["id"][-1] if serialized.get("id") else kwargs.get("name") or "unknown"
-        )
+        chain_name = _serialized_name(serialized) or kwargs.get("name") or "unknown"
         self._chain_context[run_key] = {
             "chain_name": chain_name,
             "parent_run_id": str(parent_run_id) if parent_run_id else None,
@@ -283,8 +280,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        serialized = serialized or {}
-        tool_name = serialized.get("name") or serialized.get("id", [""])[-1] or kwargs.get("name")
+        tool_name = _serialized_name(serialized, "name") or kwargs.get("name")
         messages = [{"role": "user", "content": input_str}]
         session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
@@ -468,9 +464,22 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
             self._run_sessions.pop(run_key, None)
 
 
-def _model_name(serialized: dict[str, Any] | None) -> str:
+def _serialized_name(serialized: dict[str, Any] | None, *path: str) -> str | None:
+    """The name a start callback's ``serialized`` gives its component.
+
+    The value at ``path`` (``"kwargs", "model_name"`` for a model, ``"name"``
+    for a tool) when it is set, else the class name that ends
+    ``serialized["id"]``, else ``None``. Runnables pass ``serialized=None``,
+    and nothing guarantees ``id`` is non-empty.
+    """
     serialized = serialized or {}
-    return str(serialized.get("kwargs", {}).get("model_name") or serialized.get("id", [""])[-1])
+    value: Any = serialized if path else None
+    for key in path:
+        value = value.get(key) if isinstance(value, dict) else None
+    if value:
+        return str(value)
+    ids = serialized.get("id") or []
+    return str(ids[-1]) if ids else None
 
 
 def _require_runnable_lambda() -> Any:
