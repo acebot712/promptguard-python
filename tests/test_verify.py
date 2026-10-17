@@ -226,6 +226,25 @@ class TestInstrumentationCheck:
         assert _status(result, "instrumentation") == "warn"
         assert result["ok"] is True
 
+    def test_a_live_middleware_with_no_patches_passes(self, monkeypatch):
+        """An app guarded at its edge by the FastAPI middleware is covered
+        without a single provider patch."""
+        monkeypatch.setattr(
+            verify_module,
+            "instrumentation_report",
+            lambda: {
+                "patched": [],
+                "detected_unpatched": [],
+                "middleware": ["fastapi"],
+                "advice_url": "https://x.test",
+            },
+        )
+        _patch_client(monkeypatch, _FakeSecurity())
+
+        check = next(c for c in verify()["checks"] if c["name"] == "instrumentation")
+        assert check["status"] == "pass"
+        assert "fastapi" in check["detail"]
+
 
 class TestCallerErrors:
     def test_a_missing_api_key_raises_rather_than_reporting_a_failed_check(self, monkeypatch):

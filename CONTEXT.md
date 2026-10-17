@@ -29,6 +29,14 @@ An adapter that carries scanning into a framework's own call path — LangChain,
 CrewAI, LlamaIndex.
 _Avoid_: plugin, middleware (that is one framework's word for it)
 
+**Request-edge middleware**:
+The framework integration that scans a request as it reaches the application,
+before any route runs, rather than at the LLM call — the ASGI/FastAPI
+`PromptGuardMiddleware`. Reported under `middleware` in the instrumentation
+report, never under `patched`.
+_Avoid_: firewall, gateway (both imply PromptGuard is in the request path to the
+provider, which it is not here)
+
 ### Scanning
 
 **Guard API**:
@@ -72,6 +80,13 @@ reached. The default, and a deliberate availability choice rather than a
 fallback that happens to exist.
 _Avoid_: fail-safe (ambiguous about which way it fails), degraded mode,
 bypass
+
+**Conversation**:
+The turns a framework treats as one exchange — a LangGraph thread, a chat
+engine's chat. A scan names it in `context.session_id` with the framework's own
+id, or names none; it is never a per-call run or event id.
+_Avoid_: session (the wire field's name, not the concept), thread (one
+framework's word for it)
 
 **Redaction**:
 A decision that rewrites the outgoing messages instead of stopping the call.

@@ -40,6 +40,60 @@ survives three releases is a changelog nobody is maintaining.
   The existing integration tests call the handler's methods directly, which is
   why none of the above was caught.
 
+- **Framework integrations send the framework's real conversation id as
+  `session_id`, or none** (acebot712/promptguard#956). The LangChain handler
+  used to send each call's run id, and the LlamaIndex handler each event's id,
+  so no two scans ever shared a session. The LangChain handler now sends the
+  call's `thread_id` (from LangGraph, or from `config["metadata"]`, where
+  `session_id` and `conversation_id` are read too) on the start scan and the
+  end scan alike; `PromptGuardRunnable` reads the same from its invoke config.
+  LlamaIndex events name no conversation, so its handler and
+  `PromptGuardQueryGuard` send one only when given `session_id=`. A call with
+  no conversation now sends no `session_id` at all. See "Conversations" in the
+  README for each integration.
+
+- `SECURITY.md` links to the published disclosure policy
+  (https://promptguard.co/security#reporting-a-vulnerability) instead of
+  keeping its own copy of the response times.
+
+### Added
+
+- `session_id=` on `PromptGuardCallbackHandler` (LangChain and LlamaIndex),
+  `PromptGuardRunnable`, `PromptGuardQueryGuard` and CrewAI's
+  `PromptGuardGuardrail`, for a conversation the framework does not name
+  (acebot712/promptguard#956); the call's own id wins over it.
+- `session_id=` (a function of the ASGI scope) and `session_id_header=` on
+  the FastAPI / ASGI middleware, to send the request's conversation as
+  `session_id`. Read it from the authenticated session, or from a header only
+  your own auth layer or a trusted proxy sets, never from browser input.
+- A session id over 255 characters is dropped with a debug log and the scan
+  goes ahead without one; passed to a constructor, it is a `ValueError`.
+- Auto-instrumentation sends an OpenAI Responses call's `conversation` as
+  `session_id`.
+
+- **FastAPI / ASGI middleware**, `promptguard.integrations.fastapi.PromptGuardMiddleware`
+  (acebot712/promptguard#945). It scans the fields in `DEFAULT_PROMPT_FIELDS`
+  (configurable) of any request body on the selected paths with the async Guard
+  client, and answers a block with `403` before the route runs; otherwise the
+  body is replayed to the app unchanged, chunked and compressed bodies
+  included. It reads JSON (top-level arrays too), `text/plain` and form bodies
+  in their declared charset, and decompresses gzip/deflate; multipart is not
+  scanned. Content blocks and tool calls go to the Guard API as they are.
+  `paths` and `exclude_paths` match whole segments of the route path, with
+  `root_path` stripped, so mounted apps work. A body over `max_body_bytes`
+  (`DEFAULT_MAX_BODY_BYTES`, raw or decompressed) gets `413`. A Guard
+  `400`/`413`/`422` is refused in every mode; a transport error, timeout, `5xx`
+  or `429` fails open with a `WARNING` carrying
+  `promptguard_event="guard_unavailable_fail_open"` (`fail_open=False` answers
+  `503`), and a `401`/`403` does the same after one `ERROR`. A redact decision
+  is refused in enforce mode. `anyio`, already installed by `httpx`, is now
+  declared, because the middleware parses large bodies in a worker thread
+  with it.
+- **`instrumentation_report()["middleware"]`**: the request-edge middleware
+  wrapping an app in the process (`["fastapi"]` once the app has started).
+  This is cross-SDK contract v1.7.0, which adds the key to the report;
+  `verify()` counts a live middleware as coverage.
+
 ## [2.3.0] — 2026-10-10
 
 ### Added

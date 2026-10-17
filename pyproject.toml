@@ -43,6 +43,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.24.0",
+    # Already installed by httpx; declared because the ASGI middleware imports
+    # it directly (anyio.to_thread, to parse large bodies off the event loop).
+    "anyio>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -72,6 +75,9 @@ dev = [
     # so a breaking LangChain release turns CI red instead of reaching users.
     "langchain-core>=1.6.0",
     "langgraph>=1.2.11",
+    # Test-only: the ASGI middleware imports neither, but its tests drive a real
+    # FastAPI app. httpx (a runtime dependency) supplies the ASGI transport.
+    "fastapi>=0.100.0",
 ]
 
 [project.urls]

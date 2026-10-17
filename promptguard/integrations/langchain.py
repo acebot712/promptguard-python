@@ -16,6 +16,12 @@ Usage::
 
     # Or use globally with any chain / agent
     chain.invoke({"input": "..."}, config={"callbacks": [handler]})
+
+Every scan names its Conversation in ``session_id`` with the call's own thread
+id: the ``thread_id`` LangGraph puts in every callback's metadata, or a
+``thread_id`` / ``session_id`` / ``conversation_id`` set in
+``config["metadata"]``. A call that names no thread sends no session id, unless
+the handler was given a ``session_id`` of its own.
 """
 
 import logging
@@ -23,6 +29,12 @@ from typing import Any
 from uuid import UUID
 
 from promptguard._resolve import resolve_credentials, validate_mode
+from promptguard._session import (
+    as_session_id,
+    session_id_from_metadata,
+    validate_session_id,
+    with_session_id,
+)
 from promptguard.guard import GuardClient, GuardDecision, PromptGuardBlockedError
 
 # Subclass the real base class whenever LangChain is installed. Before every
@@ -67,6 +79,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         scan_responses: bool = True,
         fail_open: bool = True,
         timeout: float = 10.0,
+        session_id: str | None = None,
     ):
         """Construct the handler.
 
@@ -74,6 +87,11 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         ----------
         mode:
             ``"enforce"`` to block policy violations, ``"monitor"`` to log only.
+        session_id:
+            The Conversation to name when a call carries no thread id of its
+            own -- for a handler that serves one conversation. A call's
+            ``thread_id`` (or ``session_id`` / ``conversation_id``) in its
+            metadata always wins. Without either, no session id is sent.
         scan_responses:
             Defaults to ``True`` here — unlike ``promptguard.init()`` which
             defaults to ``False``. The callback already receives ``on_llm_end``
@@ -97,7 +115,11 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         self._mode = mode
         self._scan_responses = scan_responses
         self._fail_open = fail_open
+        self._session_id = validate_session_id(session_id)
         self._chain_context: dict[str, dict[str, Any]] = {}
+        # The session id each in-flight LLM or tool run started with: its end
+        # callback carries no metadata, and must name the same Conversation.
+        self._run_sessions: dict[str, str | None] = {}
 
     # -- LLM callbacks -------------------------------------------------------
 
@@ -114,10 +136,14 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
     ) -> None:
         messages = [{"role": "user", "content": p} for p in prompts]
         model = _model_name(serialized)
-        context = self._build_context(run_id, parent_run_id, "llm", serialized, tags, metadata)
+        session_id = self._session_for(run_id, parent_run_id, metadata)
+        context = self._build_context(
+            run_id, parent_run_id, "llm", serialized, tags, metadata, session_id=session_id
+        )
 
         decision = self._safe_scan(messages, "input", model, context)
         self._handle_decision(decision, run_id)
+        self._remember_run(run_id, session_id)
 
     def on_chat_model_start(
         self,
@@ -158,12 +184,14 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
                     )
 
         model = _model_name(serialized)
+        session_id = self._session_for(run_id, parent_run_id, metadata)
         context = self._build_context(
-            run_id, parent_run_id, "chat_model", serialized, tags, metadata
+            run_id, parent_run_id, "chat_model", serialized, tags, metadata, session_id=session_id
         )
 
         decision = self._safe_scan(guard_messages, "input", model, context)
         self._handle_decision(decision, run_id)
+        self._remember_run(run_id, session_id)
 
     def on_llm_end(
         self,
@@ -173,6 +201,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        session_id = self._end_run(run_id)
         if not self._scan_responses:
             return
 
@@ -181,7 +210,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
             return
 
         messages = [{"role": "assistant", "content": text}]
-        context = self._build_context(run_id, parent_run_id, "llm_response")
+        context = self._build_context(run_id, parent_run_id, "llm_response", session_id=session_id)
         decision = self._safe_scan(messages, "output", context=context)
         self._handle_decision(decision, run_id)
 
@@ -218,6 +247,7 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
             "chain_name": chain_name,
             "parent_run_id": str(parent_run_id) if parent_run_id else None,
             "tags": tags,
+            "session_id": session_id_from_metadata(metadata),
         }
 
     def on_chain_end(
@@ -256,12 +286,16 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         serialized = serialized or {}
         tool_name = serialized.get("name") or serialized.get("id", [""])[-1] or kwargs.get("name")
         messages = [{"role": "user", "content": input_str}]
-        context = self._build_context(run_id, parent_run_id, "tool", serialized, tags, metadata)
+        session_id = self._session_for(run_id, parent_run_id, metadata)
+        context = self._build_context(
+            run_id, parent_run_id, "tool", serialized, tags, metadata, session_id=session_id
+        )
         context["metadata"] = context.get("metadata", {})
         context["metadata"]["tool_name"] = tool_name
 
         decision = self._safe_scan(messages, "input", "tool", context)
         self._handle_decision(decision, run_id)
+        self._remember_run(run_id, session_id)
 
     def on_tool_end(
         self,
@@ -271,13 +305,14 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        session_id = self._end_run(run_id)
         if not self._scan_responses:
             return
         text = str(output) if output else ""
         if not text:
             return
         messages = [{"role": "assistant", "content": text}]
-        context = self._build_context(run_id, parent_run_id, "tool_response")
+        context = self._build_context(run_id, parent_run_id, "tool_response", session_id=session_id)
         decision = self._safe_scan(messages, "output", context=context)
         self._handle_decision(decision, run_id)
 
@@ -356,23 +391,21 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
         serialized: dict[str, Any] | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        session_id: str | None,
     ) -> dict[str, Any]:
-        run_key = str(run_id) if run_id else "unknown"
-        chain_info = self._chain_context.get(run_key, {})
-        parent_key = str(parent_run_id) if parent_run_id else None
-        if parent_key and parent_key in self._chain_context:
-            chain_info = self._chain_context[parent_key]
-
-        return {
+        """The scan's context, naming ``session_id`` when there is one."""
+        chain_info = self._chain_info(run_id, parent_run_id)
+        context = {
             "framework": "langchain",
             "chain_name": chain_info.get("chain_name"),
-            "session_id": run_key,
             "metadata": {
                 "component": component,
                 "tags": tags or chain_info.get("tags"),
                 **(metadata or {}),
             },
         }
+        return with_session_id(context, session_id)
 
     def _extract_llm_response(self, response: Any) -> str | None:
         try:
@@ -389,10 +422,50 @@ class PromptGuardCallbackHandler(_BaseCallbackHandler):
             logger.debug("Failed to extract response text", exc_info=True)
         return None
 
+    def _chain_info(self, run_id: UUID | None, parent_run_id: UUID | None) -> dict[str, Any]:
+        parent_key = str(parent_run_id) if parent_run_id else None
+        if parent_key and parent_key in self._chain_context:
+            return self._chain_context[parent_key]
+        return self._chain_context.get(str(run_id) if run_id else "unknown", {})
+
+    def _session_for(
+        self,
+        run_id: UUID | None,
+        parent_run_id: UUID | None,
+        metadata: dict[str, Any] | None,
+    ) -> str | None:
+        """The Conversation a starting run belongs to: its own metadata's,
+        its chain's, or the handler's default."""
+        return (
+            session_id_from_metadata(metadata)
+            or self._chain_info(run_id, parent_run_id).get("session_id")
+            or self._session_id
+        )
+
+    def _remember_run(self, run_id: UUID | None, session_id: str | None) -> None:
+        """Keep a run's session id for its end scan.
+
+        Called only once the start scan has returned: langchain-core calls a
+        start callback outside the block whose error path calls
+        ``on_llm_error``, so a start that raises gets no end or error callback
+        and anything stored before it would never be removed. Nothing is
+        stored when the end scan will not run, or would name no session.
+        """
+        if run_id is not None and session_id is not None and self._scan_responses:
+            self._run_sessions[str(run_id)] = session_id
+
+    def _end_run(self, run_id: UUID | None) -> str | None:
+        """Forget a finished LLM or tool run; return the session id it started with."""
+        if run_id is None:
+            return None
+        return self._run_sessions.pop(str(run_id), None)
+
     def _cleanup_run(self, run_id: UUID | None) -> None:
         run_key = str(run_id) if run_id else None
         if run_key and run_key in self._chain_context:
             del self._chain_context[run_key]
+        if run_key:
+            self._run_sessions.pop(run_key, None)
 
 
 def _model_name(serialized: dict[str, Any] | None) -> str:
@@ -456,6 +529,7 @@ class PromptGuardRunnable:
         direction: str = "input",
         fail_open: bool = True,
         timeout: float = 10.0,
+        session_id: str | None = None,
     ):
         if direction not in ("input", "output"):
             raise ValueError(f"direction must be 'input' or 'output', got {direction!r}")
@@ -470,16 +544,21 @@ class PromptGuardRunnable:
         self._direction = direction
         self._fail_open = fail_open
         self._role = "user" if direction == "input" else "assistant"
+        self._session_id = validate_session_id(session_id)
 
-    def guard_value(self, value: Any) -> Any:
+    def guard_value(self, value: Any, config: dict[str, Any] | None = None) -> Any:
         """Scan ``value``; return it (possibly redacted) or raise on a block.
 
         This is the plain callable behind :meth:`as_runnable` — usable directly
         (e.g. in a ``RunnableLambda`` you build yourself) without importing
-        LangChain.
+        LangChain. ``config`` is the call's ``RunnableConfig``, which
+        ``RunnableLambda`` passes in: its ``configurable["thread_id"]`` -- or a
+        ``thread_id`` / ``session_id`` / ``conversation_id`` in its
+        ``metadata`` -- names the Conversation, before the guard's own
+        ``session_id``.
         """
         messages, kind, dict_key = self._to_messages(value)
-        decision = self._safe_scan(messages)
+        decision = self._safe_scan(messages, self._session_for(config))
         return self._apply_decision(decision, value, kind, dict_key)
 
     def as_runnable(self) -> Any:
@@ -512,9 +591,23 @@ class PromptGuardRunnable:
             return [{"role": self._role, "content": content}], "other", None
         return [{"role": self._role, "content": str(value)}], "other", None
 
-    def _safe_scan(self, messages: list[dict[str, str]]) -> GuardDecision | None:
+    def _session_for(self, config: dict[str, Any] | None) -> str | None:
+        config = config or {}
+        configurable = config.get("configurable") or {}
+        return (
+            as_session_id(configurable.get("thread_id"))
+            or session_id_from_metadata(config.get("metadata"))
+            or self._session_id
+        )
+
+    def _safe_scan(
+        self, messages: list[dict[str, str]], session_id: str | None
+    ) -> GuardDecision | None:
+        context = None
+        if session_id is not None:
+            context = {"framework": "langchain", "session_id": session_id}
         try:
-            return self._guard.scan(messages=messages, direction=self._direction)
+            return self._guard.scan(messages=messages, direction=self._direction, context=context)
         except Exception:
             if not self._fail_open:
                 raise
