@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-10-18
+
 ### Fixed
 
 - **`PromptGuardCallbackHandler` (LangChain) failed every call it was attached
