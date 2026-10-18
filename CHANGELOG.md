@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.4.1] — 2026-10-18
+
 ### Fixed
 
 - **The FastAPI middleware refuses JSON nested deeper than 512 levels on every
