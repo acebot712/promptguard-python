@@ -12,6 +12,14 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The FastAPI middleware refuses JSON nested deeper than 512 levels on every
+  Python.** It relied on `json.loads` raising `RecursionError`, which Python
+  3.14 no longer does, so a 100,000-deep body was parsed and passed to the app
+  there. The bound is now the middleware's own (`MAX_JSON_DEPTH`), and a deeper
+  body gets the same `400 invalid_json` on 3.10 through 3.14. CI now tests 3.14.
+
 ## [2.4.0] — 2026-10-18
 
 ### Fixed

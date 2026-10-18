@@ -340,6 +340,29 @@ def _decompress(body: bytes, encoding: str | None, limit: int) -> bytes | _Refus
     return body
 
 
+# Deeper than this, a body is refused rather than scanned. Python before 3.14
+# raised RecursionError near 1,000 levels; 3.14's json parses any depth, so the
+# bound is set here and holds the same on every interpreter.
+MAX_JSON_DEPTH = 512
+
+
+def _too_deep(value: Any) -> bool:
+    """Whether a parsed JSON value nests deeper than MAX_JSON_DEPTH (iterative)."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children: Any = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > MAX_JSON_DEPTH:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
+
 def _decode(body: bytes, charset: str) -> str | _Refusal:
     try:
         codecs.lookup(charset)
@@ -405,6 +428,8 @@ def _read_body(
             # No Content-Type and not JSON: nothing this middleware can read.
             return None
         return _Refusal(400, "invalid_json", "The body is not valid JSON")
+    if _too_deep(parsed):
+        return _Refusal(400, "invalid_json", "The JSON body is nested too deeply to scan")
     return extract_scan(parsed, fields)
 
 
