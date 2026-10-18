@@ -935,6 +935,23 @@ class TestBodiesThatUsedToGoUnscanned:
         assert seen["calls"] == 0
 
     @pytest.mark.asyncio
+    async def test_nesting_is_bounded_the_same_on_every_python(self, guard_api):
+        # Python 3.14's json no longer raises RecursionError on deep input, so
+        # the bound is the middleware's own, not the interpreter's.
+        from promptguard.integrations.fastapi import MAX_JSON_DEPTH
+
+        app, seen = _make_app()
+        at_limit = b"[" * MAX_JSON_DEPTH + b"]" * MAX_JSON_DEPTH
+        over = b"[" * (MAX_JSON_DEPTH + 1) + b"]" * (MAX_JSON_DEPTH + 1)
+        async with _client(app) as client:
+            ok = await client.post("/chat", content=at_limit, headers={"content-type": "application/json"})
+            refused = await client.post("/chat", content=over, headers={"content-type": "application/json"})
+        assert ok.status_code == 200
+        assert refused.status_code == 400
+        assert refused.json()["error"]["code"] == "invalid_json"
+
+
+    @pytest.mark.asyncio
     async def test_a_large_body_is_parsed_off_the_event_loop(self, guard_api, monkeypatch):
         import promptguard.integrations.fastapi as integration
 
