@@ -1,6 +1,6 @@
 {
   "_description": "Shared contract tests for PromptGuard SDKs. Both Python and Node SDKs MUST pass all cases in this file. If you add a feature to one SDK, add a test case here first.",
-  "_version": "1.7.0",
+  "_version": "1.8.0",
 
   "guard_decision": {
     "description": "GuardDecision must parse these API response bodies correctly.",
@@ -68,6 +68,34 @@
           "threat_type": "pii",
           "redacted_messages_count": 1,
           "redacted_first_content": "My SSN is [REDACTED]"
+        }
+      },
+      {
+        "name": "allow_with_a_flagged_threat",
+        "_comment": "v1.8.0 (#970): a finding in its detector's warn band is reported on an `allow`, with the threshold it was compared with. It is allowed, not blocked: an SDK decides on `decision`, never on whether `threats` or `threat_type` is set, and an SDK that does not know `threshold` ignores it.",
+        "input": {
+          "decision": "allow",
+          "event_id": "evt-flag-1",
+          "confidence": 0.7,
+          "threat_type": "toxicity",
+          "threats": [
+            {
+              "type": "toxicity",
+              "confidence": 0.7,
+              "details": "Flagged, not blocked",
+              "status": "active",
+              "threshold": { "band": "warn", "warn": 0.5, "block": 0.9, "score": 0.7 }
+            }
+          ],
+          "latency_ms": 4.0
+        },
+        "expect": {
+          "allowed": true,
+          "blocked": false,
+          "redacted": false,
+          "event_id": "evt-flag-1",
+          "confidence": 0.7,
+          "threat_type": "toxicity"
         }
       },
       {
