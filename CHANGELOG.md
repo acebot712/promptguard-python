@@ -12,6 +12,16 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.4.2] — 2026-10-23
+
+### Changed
+
+- **Generated API types and the cross-SDK `/guard` contract (v1.8.0) synced
+  from the published spec.** Threats now carry the `threshold` they were
+  compared with (`band`, `warn`, `block`, `score`), and an `allow` can report a
+  flagged threat in its detector's warn band. Types only; no change to how the
+  client decides.
+
 ## [2.4.1] — 2026-10-18
 
 ### Fixed
