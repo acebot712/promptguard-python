@@ -1,6 +1,6 @@
 {
   "_description": "Shared contract tests for PromptGuard SDKs. Both Python and Node SDKs MUST pass all cases in this file. If you add a feature to one SDK, add a test case here first.",
-  "_version": "1.8.0",
+  "_version": "1.10.0",
 
   "guard_decision": {
     "description": "GuardDecision must parse these API response bodies correctly.",
@@ -96,6 +96,69 @@
           "event_id": "evt-flag-1",
           "confidence": 0.7,
           "threat_type": "toxicity"
+        }
+      },
+      {
+        "name": "allow_flagged_by_a_policy",
+        "_comment": "v1.9.0: a custom policy rule (or any detector) whose action is `flag` answers `allow` with `flagged: true` and the flag among `threats`, each flagged one marked `flagged: true`, with its threat type and rule. It is allowed, not blocked: an SDK decides on `decision`, and one that does not know `flagged` ignores it.",
+        "input": {
+          "decision": "allow",
+          "event_id": "evt-flag-2",
+          "confidence": 0.7,
+          "threat_type": "data_exfiltration",
+          "flagged": true,
+          "threats": [
+            {
+              "type": "data_exfiltration",
+              "confidence": 0.7,
+              "details": "Flagged, not blocked: Custom policy 'Watch France': Policy rule matched: contains_text",
+              "rule": { "detector": "custom_policy", "id": "pol-1", "suppressible": true },
+              "status": "active",
+              "flagged": true
+            }
+          ],
+          "latency_ms": 4.0
+        },
+        "expect": {
+          "allowed": true,
+          "blocked": false,
+          "redacted": false,
+          "event_id": "evt-flag-2",
+          "confidence": 0.7,
+          "threat_type": "data_exfiltration"
+        }
+      },
+      {
+        "name": "block_resting_on_one_detector",
+        "_comment": "v1.10.0: a `block` says how many independent detectors agreed (`detectors_agreeing`) and what it rests on (`basis`: `secret`, `organisation_rule` or `detectors`; null on anything but a block). A Shadow AI Device coaches a block that rests on one detector rather than blocking it outright. It is still a block: an SDK decides on `decision`, and one that does not know these fields ignores them.",
+        "input": {
+          "decision": "block",
+          "event_id": "evt-block-2",
+          "confidence": 0.99,
+          "threat_type": "prompt_injection",
+          "threats": [
+            {
+              "type": "prompt_injection",
+              "confidence": 0.99,
+              "details": "ML api detected injection (confidence: 0.99)",
+              "rule": {
+                "detector": "ml_injection_classifier",
+                "id": "ml_injection_classifier",
+                "suppressible": true
+              }
+            }
+          ],
+          "detectors_agreeing": 1,
+          "basis": "detectors",
+          "latency_ms": 40.0
+        },
+        "expect": {
+          "allowed": false,
+          "blocked": true,
+          "redacted": false,
+          "event_id": "evt-block-2",
+          "confidence": 0.99,
+          "threat_type": "prompt_injection"
         }
       },
       {
