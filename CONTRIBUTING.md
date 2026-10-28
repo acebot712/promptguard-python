@@ -29,9 +29,10 @@ ruff check .                # Lint
 ruff check . --fix          # Lint and auto-fix
 ruff format .               # Format
 ruff format --check .       # Check formatting without fixing
+mypy promptguard            # Type check (strict settings in [tool.mypy])
 ```
 
-The project uses [Ruff](https://docs.astral.sh/ruff/) for both linting and formatting. The configuration is in `pyproject.toml` under `[tool.ruff]`.
+The project uses [Ruff](https://docs.astral.sh/ruff/) for both linting and formatting. The configuration is in `pyproject.toml` under `[tool.ruff]`. The one ruff version is the `[dev]` pin in `pyproject.toml`; CI installs exactly that pin, and the pre-commit hook's `rev` matches it, so the hook, your shell and CI format identically. Bump all three together.
 
 ### Pre-commit Hooks
 
@@ -45,6 +46,7 @@ Pre-commit runs automatically on every commit after `pre-commit install`. Hooks 
 - Private key detection
 - Ruff lint (with auto-fix)
 - Ruff format
+- gitleaks secret scan of the commits being pushed (a pre-push hook, installed by the same `pre-commit install`)
 
 To run manually:
 
@@ -59,18 +61,12 @@ pre-commit run --all-files
 ```bash
 pytest tests/ -v                                          # All tests
 pytest tests/ -v --cov --cov-report=term-missing          # With coverage report
-pytest tests/ -v --cov --cov-fail-under=50                # With coverage enforcement (CI mode)
+pytest tests/ -v --cov --cov-fail-under=60                # With coverage enforcement (CI mode)
 ```
 
 ### Test Files
 
-| File | What it tests |
-|---|---|
-| `tests/test_client.py` | HTTP client (request building, error handling, retries) |
-| `tests/test_guard_client.py` | Guard API (scan, redact, validate-tool) |
-| `tests/test_auto_instrumentation.py` | Auto-instrumentation monkey-patching of LLM SDKs |
-| `tests/test_integrations.py` | Framework integrations (LangChain, CrewAI, LlamaIndex) |
-| `tests/test_contract.py` | Contract tests against `guard-contract.json` |
+One `tests/test_<area>.py` per module or integration (`test_client`, `test_guard_client`, `test_auto_instrumentation`, `test_integrations`, `test_langchain_core`, `test_fastapi_middleware`, ...). `tests/validate_openapi.py` is not a pytest file: CI runs it against the live developer OpenAPI spec.
 
 ### Async Tests
 
@@ -93,21 +89,12 @@ async def test_async_scan(): ...
 Coverage is configured in `pyproject.toml`:
 
 - Source: `promptguard/` package
-- Minimum threshold: **50%** (`fail_under = 50`)
+- Minimum threshold: **60%** (`fail_under = 60`)
 - Shows missing lines in terminal output
 
-### Environment Variables
+### No live-API mode
 
-Tests mock the API by default. To run against a live API:
-
-```bash
-PROMPTGUARD_API_KEY=pg_test_... PROMPTGUARD_BASE_URL=http://localhost:8080 pytest tests/ -v
-```
-
-| Variable | Default | Description |
-|---|---|---|
-| `PROMPTGUARD_API_KEY` | (none) | API key for live testing |
-| `PROMPTGUARD_BASE_URL` | `https://api.promptguard.co` | API base URL |
+The whole suite is mocked: no test makes a network call. Setting `PROMPTGUARD_API_KEY` or `PROMPTGUARD_BASE_URL` does not point any test at a real API; the tests that depend on them set or delete them with `monkeypatch`, so values in your shell cannot change the result. To try the SDK against a real backend, write a throwaway script.
 
 ## CI/CD
 
@@ -115,17 +102,20 @@ CI runs on every push to `main` and on PRs (`.github/workflows/ci.yml`):
 
 | Job | What it does |
 |---|---|
-| **Lint & Format** | `ruff check .` + `ruff format --check .` (using ruff 0.15.4) |
-| **Test** | `pytest` with coverage on Python 3.10, 3.11, 3.12, 3.13 |
+| **Lint & Format** | `ruff check .` + `ruff format --check .`, using the `[dev]` ruff pin read from `pyproject.toml` |
+| **Type Check** | `mypy promptguard` |
+| **Test** | `pytest` with coverage (`--cov-fail-under=60`) on Python 3.10, 3.11, 3.12, 3.13, 3.14 |
+| **LangChain extras floor** | The LangChain tests on Python 3.10 against the lowest `langchain-core` the `all` extra allows |
+| **Validate API Contract** | Downloads the developer OpenAPI spec and checks SDK types against it |
 | **Build** | `python -m build` + verify import works |
+
+Secret scanning (gitleaks) runs on every push and PR in `.github/workflows/secret-scan.yml`, kept out of `ci.yml` so docs-only commits are still scanned.
 
 Reproduce CI locally:
 
 ```bash
-ruff check . && ruff format --check . && pytest tests/ -v --cov --cov-fail-under=50
+ruff check . && ruff format --check . && mypy promptguard && pytest tests/ -v --cov --cov-fail-under=60
 ```
-
-> **Note:** CI pins `ruff==0.15.4`. The dev dependency in `pyproject.toml` pins `ruff==0.15.8`. Both should work, but if you see lint differences, check your local ruff version.
 
 ## Releasing
 
@@ -148,7 +138,8 @@ Trusted Publishing requires the PyPI project to have a configured trusted publis
 
 - [ ] `ruff check .` passes
 - [ ] `ruff format --check .` passes
-- [ ] `pytest tests/ -v --cov --cov-fail-under=50` passes
+- [ ] `mypy promptguard` passes
+- [ ] `pytest tests/ -v --cov --cov-fail-under=60` passes
 - [ ] `pre-commit run --all-files` passes
 - [ ] New functionality has tests
 - [ ] Contract tests updated if request/response shapes changed
