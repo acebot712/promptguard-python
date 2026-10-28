@@ -1,90 +1,58 @@
 # AGENTS.md
 
-## Overview
-
-Python SDK for PromptGuard (`promptguard-sdk` on PyPI). Provides auto-instrumentation for LLM SDKs (OpenAI, Anthropic, Google, Cohere, Bedrock), a Guard API client, and framework integrations (LangChain, CrewAI, LlamaIndex).
-
-## Repository Layout
-
-```
-promptguard/
-├── client.py          # HTTP client (proxy mode)
-├── guard.py           # Guard API client
-├── auto.py            # Auto-instrumentation (promptguard.init())
-├── config.py          # Configuration and environment
-├── patches/           # SDK monkey-patches (openai, anthropic, etc.)
-└── integrations/      # Framework integrations (langchain, crewai, llamaindex, fastapi)
-
-tests/
-├── test_client.py
-├── test_guard_client.py
-├── test_auto_instrumentation.py
-├── test_integrations.py
-├── test_contract.py
-└── guard-contract.json    # Shared contract spec
-```
+Python SDK for PromptGuard, published to PyPI as `promptguard-sdk`; the Node SDK
+(`promptguard-node`) is its deliberate mirror. Domain vocabulary lives in
+`CONTEXT.md`; layout, dependencies and tool config live in `pyproject.toml`.
 
 ## Setup
 
 ```bash
 pip install -e ".[dev]"
-pre-commit install               # tracked git hooks; do this once per clone
+pre-commit install               # once per clone: wires the commit AND push hooks
 ```
 
-Not optional any more: `pre-commit install` wires the push stage too, and that
-stage runs a gitleaks scan of the commits you are pushing. This package is
-published to PyPI and the repo is public, so a credential reaching `main` is
-world-readable at once — and CI runs no secret scanning, so this hook is the
-only one there is. It is scoped to the pushed range on purpose: scanning the
-tree or the history fails on its first run and teaches everyone `--no-verify`.
-Fixtures that must look like credentials (the config-repr redaction tests) are
-exempted by path in `.gitleaks.toml`, where the exemption is reviewable.
+Keep API keys, tokens and credentials out of every commit. The repo is public
+and on PyPI, so a credential that reaches `main` is world-readable at once and
+has to be rotated, not reverted. The push hook runs gitleaks over the commits
+being pushed; CI's `secret-scan.yml` is the backstop. A fixture that must look
+like a credential gets a path exemption in `.gitleaks.toml`, where it is
+reviewable, instead of a `--no-verify`. Why the scan covers only the pushed
+range: `scripts/hooks/gitleaks-push.sh`.
 
-## Building and Testing
+## Checks
+
+After editing Python, run `ruff check --fix .` and `ruff format .`. Before
+pushing, reproduce CI (`.github/workflows/ci.yml`):
 
 ```bash
-pytest tests/ -v                              # Run all tests
-pytest tests/ -v --cov --cov-report=term-missing  # With coverage
-pytest tests/test_client.py -v               # Single file
-pre-commit run --all-files                   # All hooks
-
-# Live API tests (optional, needs real credentials)
-PROMPTGUARD_API_KEY=pg_... PROMPTGUARD_BASE_URL=https://api.promptguard.co pytest tests/ -v
+ruff check . && ruff format --check . && mypy promptguard && pytest tests/ --cov
 ```
 
-## Code Quality
+The suite is fully mocked and offline. `pytest` turns warnings into errors and
+runs pytest-asyncio in strict mode, so every async test needs
+`@pytest.mark.asyncio`. Code must run on Python 3.10, the oldest CI leg.
 
-```bash
-ruff check .                    # Lint
-ruff check . --fix              # Lint with auto-fix
-ruff format .                   # Format
-ruff format . --check           # Check formatting
-```
+## Coding standards
 
-Always run `ruff check` and `ruff format` after editing Python files.
+- Type hints on every public function and method.
+- The SDK stays lightweight: a new runtime dependency needs discussion first.
+- The public surface is `__all__` in `promptguard/__init__.py`; keep it small,
+  and change or remove a name there only with a major version bump.
 
-## Coding Standards
+## The guard contract and generated types
 
-- Python 3.10+ required
-- Type hints on all public functions and methods
-- Ruff for both linting and formatting (configured in `pyproject.toml`)
-- Tests use pytest with pytest-asyncio for async code
-- Avoid adding runtime dependencies without discussion
-- Keep the public API surface small: `init()`, `GuardClient`, and framework integrations
+`tests/guard-contract.json` holds the cases both SDKs must pass, and
+`promptguard/generated/` is built from the published OpenAPI spec. Both arrive
+through the scheduled `sync-from-api.yml` PR; hand-edits fail the suite (the
+contract lock) or get overwritten (the types). A behaviour change that both
+SDKs share starts upstream in the contract. Before touching either, read
+`docs/adr/0001-shared-guard-contract.md`.
 
-## Commit Messages
+## Commit messages
 
-- Imperative mood: "Add X" not "Added X"
-- Focus on what changed from the user's perspective
-- Reference issues when applicable
-
-## Boundaries
-
-### Never
-- Commit API keys, tokens, or credentials
-- Add heavyweight runtime dependencies (the SDK should stay lightweight)
-- Break the public API without a major version bump
-- Modify `guard-contract.json` without coordinating with the Node.js SDK
+Conventional prefix plus imperative mood (`fix: drop a session id over 255
+characters`), describing the change as a user sees it, with the issue reference
+where there is one (`(promptguard#956)`, `(#945)`).
 
 ## Agent skills
 
