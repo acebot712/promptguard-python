@@ -16,7 +16,7 @@ repos:
         stages: [pre-commit]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.20
+    rev: v0.16.9  # keep equal to the ruff==X pin in pyproject.toml [dev]; CI installs that pin
     hooks:
       - id: ruff
         stages: [pre-commit]
@@ -27,8 +27,9 @@ repos:
   - repo: local
     hooks:
       # Secret scanning at PUSH time. This package is published to PyPI and the
-      # repo is public, so a credential reaching main is world-readable at once
-      # -- and CI here runs no secret scanning at all, so this is the only one.
+      # repo is public, so a credential reaching main is world-readable at once.
+      # CI scans too (.github/workflows/secret-scan.yml); this catches it before
+      # the push, while the commit can still be amended instead of rotated.
       - id: gitleaks-push
         name: Secret scan the commits being pushed (gitleaks)
         entry: scripts/hooks/gitleaks-push.sh
