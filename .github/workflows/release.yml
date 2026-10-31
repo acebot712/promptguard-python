@@ -64,6 +64,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.check.outputs.exists == 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -115,3 +118,27 @@ jobs:
       - name: Publish (Trusted Publishing)
         if: steps.check.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  # Tells Slack #releases this version is on PyPI (ADR-0038 in the platform
+  # repo). Only after a real publish, never for a re-run that found the
+  # version already there. It cannot fail the release: the job is
+  # continue-on-error and post-release.sh exits 0 on every failure, with a
+  # warning (an unset SLACK_RELEASES_WEBHOOK_URL included).
+  announce:
+    name: Announce in #releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: publish
+    if: needs.publish.outputs.published == 'true'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: scripts
+      - name: Post to #releases
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          scripts/post-release.sh "Python SDK" "v${VERSION}" \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/v${VERSION} · https://pypi.org/project/promptguard-sdk/${VERSION}/"

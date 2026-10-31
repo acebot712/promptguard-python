@@ -88,6 +88,7 @@ Homepage = "https://promptguard.co"
 Documentation = "https://docs.promptguard.co"
 Repository = "https://github.com/acebot712/promptguard-python"
 Issues = "https://github.com/acebot712/promptguard-python/issues"
+Changelog = "https://github.com/acebot712/promptguard-python/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "promptguard/_version.py"
