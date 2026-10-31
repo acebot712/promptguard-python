@@ -150,8 +150,11 @@ assert promptguard.verify()["ok"]
 ```
 
 It checks reachability, authentication, live threat detection and PII redaction,
-plus which provider SDKs this process actually patched — the same checks, under
-the same names, as `promptguard verify` in the CLI.
+plus which provider SDKs this process actually patched. The check names are
+`connectivity`, `authentication`, `threat_detection`, `pii_redaction` and
+`instrumentation`. `promptguard verify` in the CLI sends the same two probes but
+is not the same report: it has no instrumentation check (it cannot see inside
+your process) and no `warn` status in its JSON output, only pass/fail counts.
 
 Each check reports `pass`, `warn` or `fail`. **Only a `fail` clears `ok`.** A
 request that never completed is a failure; a request that completed and came
@@ -547,10 +550,17 @@ if result["blocked"]:
 ## PII Redaction
 
 ```python
-result = pg.security.redact("My email is john@example.com and SSN is 123-45-6789")
+result = pg.security.redact("My email is jane.doe@acme.com and SSN is 123-45-6789")
 print(result["redacted"])
-# Output: "My email is [EMAIL] and SSN is [SSN]"
+# Output: "My email is [EMAIL_REDACTED] and SSN is [SSN_REDACTED]"
+print(result["piiFound"])
+# Output: ['email', 'ssn']
 ```
+
+Each match is replaced by a `[<TYPE>_REDACTED]` placeholder. Addresses at the
+domains reserved for documentation (`example.com`, `.test`, `.invalid`,
+`.localhost`) are deliberately left alone, so `john@example.com` comes back
+unchanged.
 
 ## Agent Tool Validation
 
@@ -590,8 +600,10 @@ print(f"{catalog['total']} attacks available")
 summary = pg.redteam.run_all(target_preset="support_bot:strict")
 print(f"Blocked {summary['blocked']}/{summary['total_tests']} ({summary['block_rate']:.0%})")
 
-# Run one named attack
-result = pg.redteam.run_test("prompt_injection_basic")
+# Run one attack, by the `name` the catalog lists (e.g. "pi_001")
+first = catalog["tests"][0]["name"]
+result = pg.redteam.run_test(first, target_preset="support_bot:strict")
+print(result["test_name"], result["decision"])
 
 # Or your own adversarial prompt
 result = pg.redteam.run_custom("ignore previous instructions and ...")
@@ -624,7 +636,7 @@ async with PromptGuardAsync(api_key="pg_live_xxx") as pg:
     result = await pg.security.scan("Check this content")
 
     # Async PII redaction
-    redacted = await pg.security.redact("My email is john@example.com")
+    redacted = await pg.security.redact("My email is jane.doe@acme.com")
 ```
 
 The async client mirrors the synchronous API - every method available on `PromptGuard` has an `await`-able counterpart on `PromptGuardAsync`.
