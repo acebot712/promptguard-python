@@ -212,7 +212,9 @@ changed. All of it lives in `promptguard.generated.api_types`.
 
 Additive only — nothing in 2.0.0 changed behaviour or signature.
 
-## [2.0.0] — 2026-08-24
+## [2.0.0] — 2026-08-26
+
+What each removal means for your code, and what to use instead: [Upgrade to SDK and CLI 2.0](https://docs.promptguard.co/releases/sdk-v2-upgrade).
 
 ### Fixed
 
