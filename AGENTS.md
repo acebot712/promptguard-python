@@ -62,7 +62,7 @@ signed in as this repository through Workload Identity; GitHub keeps only
 identifiers, as variables (`vars.*`). A workflow that names any `secrets.*` but
 `GITHUB_TOKEN` fails CI (`scripts/check_no_github_secrets.py`). The inventory,
 and how to add a secret with its per-secret grant:
-[`ENVIRONMENT_VARIABLES.md` § CI/CD-only](https://github.com/acebot712/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only)
+[`ENVIRONMENT_VARIABLES.md` § CI/CD-only](https://github.com/promptguardhq/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only)
 in the platform repo.
 
 ## Agent skills

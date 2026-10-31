@@ -5,7 +5,7 @@ Every secret lives in Google Secret Manager, and a workflow reads it at run
 time through Workload Identity (google-github-actions/auth, then
 get-secretmanager-secrets). GitHub keeps only identifiers, as variables
 (`vars.*`). The rule and the inventory live in the platform repo:
-https://github.com/acebot712/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only
+https://github.com/promptguardhq/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only
 
 A copy of promptguard's scripts/utils/check_no_github_secrets.py, kept in step
 with it by hand: each of the seven repos runs the same check in its own CI.
@@ -97,7 +97,7 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
-            "(https://github.com/acebot712/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only):",
+            "(https://github.com/promptguardhq/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only):",
             file=sys.stderr,
         )
         for v in found:

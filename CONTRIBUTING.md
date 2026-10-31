@@ -11,7 +11,7 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/acebot712/promptguard-python.git
+git clone https://github.com/promptguardhq/promptguard-python.git
 cd promptguard-python
 python -m venv .venv
 source .venv/bin/activate
@@ -132,7 +132,7 @@ The release workflow (`.github/workflows/release.yml`):
 2. Checks if the version already exists on PyPI
 3. Publishes via PyPI Trusted Publishing (OIDC, no token needed)
 
-Trusted Publishing requires the PyPI project to have a configured trusted publisher for `acebot712/promptguard-python` with workflow `release.yml`.
+Trusted Publishing requires the PyPI project to have a configured trusted publisher for `promptguardhq/promptguard-python` with workflow `release.yml`.
 
 ## PR Checklist
 
@@ -147,7 +147,7 @@ Trusted Publishing requires the PyPI project to have a configured trusted publis
 
 ## Reporting Issues
 
-Open an issue at https://github.com/acebot712/promptguard-python/issues with:
+Open an issue at https://github.com/promptguardhq/promptguard-python/issues with:
 
 - Python version (`python --version`)
 - SDK version (`pip show promptguard-sdk`)

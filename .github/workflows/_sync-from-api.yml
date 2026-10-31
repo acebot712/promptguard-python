@@ -1,7 +1,7 @@
 name: Sync Types from API Spec (reusable)
 
 # Shared by promptguard-python's own sync-from-api.yml and
-# promptguard-node's (via `uses: acebot712/promptguard-python/.github/...`).
+# promptguard-node's (via `uses: promptguardhq/promptguard-python/.github/...`).
 # The two callers' workflows were a near-1:1 duplicate of this job, differing
 # only in the language toolchain and a few filenames -- see this repo's
 # sync-from-api.yml for the python inputs, and promptguard-node's for the
