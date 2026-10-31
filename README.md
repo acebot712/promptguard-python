@@ -730,6 +730,21 @@ except PromptGuardError as e:
         print(f"{e.code} ({e.status_code}): {e}")
 ```
 
+## Versioning and support
+
+- **Versions** follow [semantic versioning](https://semver.org): anything in
+  the public interface is removed or renamed only in a new major version, and
+  every change is in [`CHANGELOG.md`](./CHANGELOG.md).
+- **Runtimes:** Python 3.10 or later (`requires-python` in
+  [`pyproject.toml`](./pyproject.toml)), tested in CI on 3.10 to 3.14.
+- **API version:** the SDK calls PromptGuard's `/api/v1` API
+  (`https://api.promptguard.co/api/v1` unless you set `base_url`).
+- **Previous major version:** when a new major version ships, the previous one
+  gets security fixes for 12 months. 1.x gets them until 2027-08-26, 12 months
+  after 2.0.0. Moving from 1.x: [Upgrade to SDK and CLI 2.0](https://docs.promptguard.co/releases/sdk-v2-upgrade).
+
+The full policy: [Versioning & support](https://docs.promptguard.co/versioning-and-support).
+
 ## Links
 
 - [Documentation](https://docs.promptguard.co)
