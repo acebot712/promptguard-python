@@ -9,8 +9,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 a dated version section when a release goes out — an `Unreleased` block that
 survives three releases is a changelog nobody is maintaining.
 
-
 ## [Unreleased]
+
+### Added
+
+- **Every release is announced in Slack `#releases`, and PyPI links the
+  changelog.** After a real publish, the release workflow's new `announce` job
+  posts the version, its GitHub Release and its PyPI page through
+  `scripts/post-release.sh`, a copy of the platform repo's script. It reads
+  the `SLACK_RELEASES_WEBHOOK_URL` secret, and an unset secret or a Slack
+  failure is a warning, never a failed release. `pyproject.toml` adds a
+  `Changelog` project URL, which PyPI lists beside Homepage and Repository.
 
 ## [2.4.2] — 2026-10-23
 
@@ -163,7 +172,6 @@ changed. All of it lives in `promptguard.generated.api_types`.
   (#40). Types only: no runtime behaviour changes. Published so the package on
   PyPI matches the contract the API now serves.
 
-
 ## [2.2.0] — 2026-09-06
 
 ### Added
@@ -223,7 +231,6 @@ Additive only — nothing in 2.0.0 changed behaviour or signature.
 
   There is no replacement, because there was nothing to replace. For chat
   traffic, use `client.chat.completions.create(...)`, which is unchanged.
-
 
 ## [1.13.0] — 2026-08-16
 
