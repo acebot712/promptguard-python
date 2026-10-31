@@ -54,6 +54,17 @@ Conventional prefix plus imperative mood (`fix: drop a session id over 255
 characters`), describing the change as a user sees it, with the issue reference
 where there is one (`(promptguard#956)`, `(#945)`).
 
+## GitHub holds no secrets
+
+**Change a secret in Secret Manager; GitHub holds none.** Workflows read every
+secret at run time from Google Secret Manager (`promptguard-production-472014`),
+signed in as this repository through Workload Identity; GitHub keeps only
+identifiers, as variables (`vars.*`). A workflow that names any `secrets.*` but
+`GITHUB_TOKEN` fails CI (`scripts/check_no_github_secrets.py`). The inventory,
+and how to add a secret with its per-secret grant:
+[`ENVIRONMENT_VARIABLES.md` § CI/CD-only](https://github.com/acebot712/promptguard/blob/main/docs/04_engineering/reference/ENVIRONMENT_VARIABLES.md#cicd-only)
+in the platform repo.
+
 ## Agent skills
 
 ### Issue tracker
