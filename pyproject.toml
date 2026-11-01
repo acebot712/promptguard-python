@@ -68,7 +68,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=6.0.0",
-    "ruff==0.16.9",
+    "ruff==0.17.3",
     "mypy>=1.11.0",
     "pre-commit>=4.0.0",
     # tests/test_langchain_core.py drives the callback handler through the real
