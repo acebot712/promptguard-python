@@ -157,7 +157,13 @@ asyncio_mode = "strict"
 # pytest-asyncio 1.4 warns while this is unset, and filterwarnings = error makes
 # that warning abort the run. "function" is the scope it will default to.
 asyncio_default_fixture_loop_scope = "function"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # langsmith (pulled in by langchain-core) still calls
+    # asyncio.iscoroutinefunction, which Python 3.14 deprecates. Theirs to fix;
+    # scoped to that one message from that one package, so ours still errors.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith",
+]
 
 [tool.coverage.run]
 source = ["promptguard"]
