@@ -154,6 +154,9 @@ line-ending = "lf"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+# pytest-asyncio 1.4 warns while this is unset, and filterwarnings = error makes
+# that warning abort the run. "function" is the scope it will default to.
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = ["error"]
 
 [tool.coverage.run]
